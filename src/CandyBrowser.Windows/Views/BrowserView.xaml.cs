@@ -16,6 +16,11 @@ public partial class BrowserView : UserControl
     private bool _isInitialized;
     private string? _pendingUrl;
     private IDownloadService? _downloadService;
+    private bool _isDisposed;
+
+    // Shared WebView2 environment for all instances
+    private static CoreWebView2Environment? _sharedEnvironment;
+    private static readonly object _envLock = new();
 
     public BrowserView()
     {
@@ -28,6 +33,30 @@ public partial class BrowserView : UserControl
         _downloadService = downloadService;
     }
 
+    private static async Task<CoreWebView2Environment> GetSharedEnvironmentAsync()
+    {
+        if (_sharedEnvironment != null) return _sharedEnvironment;
+
+        lock (_envLock)
+        {
+            if (_sharedEnvironment != null) return _sharedEnvironment;
+        }
+
+        var env = await CoreWebView2Environment.CreateAsync(
+            browserExecutableFolder: null,
+            userDataFolder: Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "CandyBrowser", "WebView2Data"),
+            options: new CoreWebView2EnvironmentOptions());
+
+        lock (_envLock)
+        {
+            _sharedEnvironment = env;
+        }
+
+        return env;
+    }
+
     private async void BrowserView_Loaded(object sender, RoutedEventArgs e)
     {
         await InitializeWebViewAsync();
@@ -37,19 +66,14 @@ public partial class BrowserView : UserControl
     {
         try
         {
-            var env = await CoreWebView2Environment.CreateAsync(
-                browserExecutableFolder: null,
-                userDataFolder: Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                    "CandyBrowser", "WebView2Data"),
-                options: new CoreWebView2EnvironmentOptions());
-
+            var env = await GetSharedEnvironmentAsync();
             await WebView.EnsureCoreWebView2Async(env);
 
             WebView.CoreWebView2.Settings.IsStatusBarEnabled = false;
             WebView.CoreWebView2.Settings.AreDevToolsEnabled = true;
             WebView.CoreWebView2.Settings.IsBuiltInErrorPageEnabled = true;
             WebView.CoreWebView2.Settings.IsZoomControlEnabled = true;
+            WebView.CoreWebView2.Settings.AreDefaultContextMenusEnabled = true;
 
             _isInitialized = true;
             LoadingOverlay.Visibility = Visibility.Collapsed;
