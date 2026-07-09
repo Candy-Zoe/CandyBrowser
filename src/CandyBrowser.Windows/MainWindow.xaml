@@ -8,7 +8,13 @@
 
     <Window.InputBindings>
         <KeyBinding Key="T" Modifiers="Control" Command="{Binding NewTabCommand}"/>
+        <KeyBinding Key="W" Modifiers="Control" Command="{Binding CloseTabCommand}" CommandParameter="{Binding SelectedTab}"/>
+        <KeyBinding Key="L" Modifiers="Control" Command="{Binding FocusAddressBarCommand}"/>
+        <KeyBinding Key="D" Modifiers="Control" Command="{Binding AddBookmarkCommand}"/>
         <KeyBinding Key="F5" Command="{Binding ReloadCommand}"/>
+        <KeyBinding Key="F12" Command="{Binding OpenDevToolsCommand}"/>
+        <KeyBinding Key="Left" Modifiers="Alt" Command="{Binding GoBackCommand}"/>
+        <KeyBinding Key="Right" Modifiers="Alt" Command="{Binding GoForwardCommand}"/>
     </Window.InputBindings>
 
     <Grid>
@@ -20,7 +26,7 @@
         </Grid.RowDefinitions>
 
         <!-- Tab Strip -->
-        <Border Grid.Row="0" Background="#F5F5F5">
+        <Border Grid.Row="0" Background="#E8E8E8">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto"/>
@@ -28,9 +34,20 @@
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
 
-                <TextBlock Grid.Column="0" Text="🍬" FontSize="16" Margin="12,8" VerticalAlignment="Center"/>
+                <!-- Logo -->
+                <Border Grid.Column="0" Background="#FF6B9D" CornerRadius="0,0,8,0"
+                        Padding="12,6,10,6" Cursor="Hand"
+                        MouseLeftButtonUp="Logo_MouseLeftButtonUp">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="🍬" FontSize="14" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                        <TextBlock Text="Candy" FontSize="13" FontWeight="Bold" Foreground="White"
+                                   VerticalAlignment="Center"/>
+                    </StackPanel>
+                </Border>
 
-                <ScrollViewer Grid.Column="1" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+                <!-- Tabs -->
+                <ScrollViewer Grid.Column="1" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled"
+                              Margin="0,4,0,0">
                     <ItemsControl ItemsSource="{Binding Tabs}">
                         <ItemsControl.ItemsPanel>
                             <ItemsPanelTemplate>
@@ -39,42 +56,76 @@
                         </ItemsControl.ItemsPanel>
                         <ItemsControl.ItemTemplate>
                             <DataTemplate>
-                                <Border Margin="2,4" Padding="8,4" CornerRadius="4"
-                                        Background="White" BorderBrush="#E0E0E0" BorderThickness="1"
-                                        Cursor="Hand" MinWidth="120" MaxWidth="200"
+                                <Border x:Name="TabBorder" Margin="1,0" Padding="10,5" CornerRadius="8,8,0,0"
+                                        Background="Transparent" Cursor="Hand" MinWidth="100" MaxWidth="220"
                                         MouseLeftButtonDown="Tab_MouseLeftButtonDown"
-                                        MouseDown="Tab_MouseDown">
+                                        MouseDown="Tab_MouseDown"
+                                        BorderThickness="0">
                                     <Grid>
                                         <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto"/>
                                             <ColumnDefinition Width="*"/>
                                             <ColumnDefinition Width="Auto"/>
                                         </Grid.ColumnDefinitions>
-                                        <TextBlock Grid.Column="0" Text="{Binding Title}" 
+                                        <!-- Favicon placeholder -->
+                                        <TextBlock Grid.Column="0" Text="📄" FontSize="12"
+                                                   VerticalAlignment="Center" Margin="0,0,6,0"
+                                                   Foreground="#666"/>
+                                        <TextBlock Grid.Column="1" Text="{Binding Title}" 
                                                    TextTrimming="CharacterEllipsis" VerticalAlignment="Center"
-                                                   Foreground="#333"/>
-                                        <Button Grid.Column="1" Content="x" 
-                                                Command="{Binding DataContext.CloseTabCommand, 
-                                                    RelativeSource={RelativeSource AncestorType=Window}}"
-                                                CommandParameter="{Binding}"
-                                                Background="Transparent" BorderThickness="0"
-                                                Foreground="#666" Cursor="Hand" Padding="4,2"
-                                                MouseLeftButtonDown="TabClose_MouseLeftButtonDown"/>
+                                                   Foreground="#333" FontSize="12"/>
+                                        <Border Grid.Column="2" Width="20" Height="20"
+                                                CornerRadius="4" Cursor="Hand"
+                                                Background="Transparent"
+                                                ToolTip="关闭标签"
+                                                MouseLeftButtonDown="TabClose_MouseLeftButtonDown"
+                                                Margin="4,0,0,0">
+                                            <TextBlock Text="✕" FontSize="10" Foreground="#999"
+                                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                        </Border>
                                     </Grid>
+                                    <Border.Style>
+                                        <Style TargetType="Border">
+                                            <Setter Property="Background" Value="Transparent"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsSelected, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True">
+                                                    <Setter Property="Background" Value="White"/>
+                                                </DataTrigger>
+                                                <Trigger Property="IsMouseOver" Value="True">
+                                                    <Setter Property="Background" Value="#F0F0F0"/>
+                                                </Trigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Border.Style>
                                 </Border>
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
                 </ScrollViewer>
 
-                <Button Grid.Column="2" Content="+" Command="{Binding NewTabCommand}"
-                        Background="Transparent" BorderThickness="0" FontSize="18"
-                        Foreground="#666" Width="32" Height="28" Margin="4,4" Cursor="Hand"/>
+                <!-- New Tab Button -->
+                <Border Grid.Column="2" Width="32" Height="28" Margin="4,4,8,4"
+                        CornerRadius="6" Cursor="Hand" Background="Transparent"
+                        ToolTip="新建标签页 (Ctrl+T)"
+                        MouseLeftButtonDown="NewTab_Click">
+                    <TextBlock Text="＋" FontSize="16" Foreground="#666"
+                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    <Border.Style>
+                        <Style TargetType="Border">
+                            <Style.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter Property="Background" Value="#D0D0D0"/>
+                                </Trigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Border.Style>
+                </Border>
             </Grid>
         </Border>
 
         <!-- Toolbar -->
-        <Border Grid.Row="1" Background="#FAFAFA" BorderBrush="#E0E0E0" BorderThickness="0,1">
-            <Grid Margin="8,4">
+        <Border Grid.Row="1" Background="#F0F0F0" BorderBrush="#E0E0E0" BorderThickness="0,1">
+            <Grid Margin="6,3">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="Auto"/>
@@ -87,49 +138,99 @@
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
 
-                <Button Grid.Column="0" Content="←" Command="{Binding GoBackCommand}"
-                        IsEnabled="{Binding CanGoBack}" Background="Transparent" BorderThickness="0"
-                        Foreground="#333" Width="32" Height="28" Cursor="Hand" FontSize="16"/>
-                <Button Grid.Column="1" Content="→" Command="{Binding GoForwardCommand}"
-                        IsEnabled="{Binding CanGoForward}" Background="Transparent" BorderThickness="0"
-                        Foreground="#333" Width="32" Height="28" Cursor="Hand" FontSize="16"/>
-                <Button Grid.Column="2" Content="R" Command="{Binding ReloadCommand}"
-                        Background="Transparent" BorderThickness="0"
-                        Foreground="#333" Width="32" Height="28" Cursor="Hand" FontSize="14"/>
-                <Button Grid.Column="3" Content="Home" Command="{Binding OpenHomepageCommand}"
-                        Background="Transparent" BorderThickness="0"
-                        Foreground="#333" Width="40" Height="28" Cursor="Hand" FontSize="12"/>
+                <!-- Navigation buttons -->
+                <Button Grid.Column="0" Content="◀" Command="{Binding GoBackCommand}"
+                        IsEnabled="{Binding CanGoBack}" ToolTip="后退 (Alt+←)"
+                        Style="{StaticResource NavButtonStyle}"/>
+                <Button Grid.Column="1" Content="▶" Command="{Binding GoForwardCommand}"
+                        IsEnabled="{Binding CanGoForward}" ToolTip="前进 (Alt+→)"
+                        Style="{StaticResource NavButtonStyle}"/>
+                <Button Grid.Column="2" Content="⟳" Command="{Binding ReloadCommand}"
+                        ToolTip="刷新 (F5)"
+                        Style="{StaticResource NavButtonStyle}"/>
+                <Button Grid.Column="3" Content="⌂" Command="{Binding OpenHomepageCommand}"
+                        ToolTip="主页"
+                        Style="{StaticResource NavButtonStyle}"/>
 
-                <TextBox Grid.Column="4" x:Name="AddressBar" 
-                         Text="{Binding AddressBarText, UpdateSourceTrigger=PropertyChanged}"
-                         KeyDown="AddressBar_KeyDown"
-                         GotFocus="AddressBar_GotFocus"
-                         LostFocus="AddressBar_LostFocus"
-                         Background="White" BorderBrush="#E0E0E0" BorderThickness="1"
-                         Padding="8,6" FontSize="14" VerticalContentAlignment="Center"/>
+                <!-- Address bar with rounded corners -->
+                <Grid Grid.Column="4" Margin="6,0">
+                    <Border CornerRadius="20" BorderBrush="#D0D0D0" BorderThickness="1"
+                            Background="White">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <!-- Search icon -->
+                            <TextBlock Grid.Column="0" Text="🔍" FontSize="12"
+                                       VerticalAlignment="Center" Margin="12,0,4,0"
+                                       Foreground="#999"/>
+                            <TextBox x:Name="AddressBar" Grid.Column="1"
+                                     Text="{Binding AddressBarText, UpdateSourceTrigger=PropertyChanged}"
+                                     KeyDown="AddressBar_KeyDown"
+                                     KeyUp="AddressBar_KeyUp"
+                                     GotFocus="AddressBar_GotFocus"
+                                     LostFocus="AddressBar_LostFocus"
+                                     TextChanged="AddressBar_TextChanged"
+                                     Background="Transparent" BorderThickness="0"
+                                     Padding="4,6" FontSize="13" VerticalContentAlignment="Center"/>
+                        </Grid>
+                    </Border>
 
-                <Button Grid.Column="5" Content="*" Command="{Binding AddBookmarkCommand}"
-                        Background="Transparent" BorderThickness="0"
-                        Foreground="#333" Width="32" Height="28" Cursor="Hand" FontSize="16"
-                        ToolTip="添加书签"/>
-                <Button Grid.Column="6" Content="B" Command="{Binding ToggleBookmarkSidebarCommand}"
-                        Background="Transparent" BorderThickness="0"
-                        Foreground="#333" Width="32" Height="28" Cursor="Hand" FontSize="14"
-                        ToolTip="书签栏"/>
-                <Button Grid.Column="7" Content="H" Command="{Binding ToggleHistoryPanelCommand}"
-                        Background="Transparent" BorderThickness="0"
-                        Foreground="#333" Width="32" Height="28" Cursor="Hand" FontSize="14"
-                        ToolTip="历史记录"/>
-                <Button Grid.Column="8" Content="S" Command="{Binding OpenSettingsCommand}"
-                        Background="Transparent" BorderThickness="0"
-                        Foreground="#333" Width="32" Height="28" Cursor="Hand" FontSize="14"
-                        ToolTip="设置"/>
+                    <!-- Search suggestions popup -->
+                    <Popup x:Name="SuggestionsPopup" IsOpen="False"
+                           PlacementTarget="{Binding ElementName=AddressBar}"
+                           Placement="Bottom" AllowsTransparency="True"
+                           StaysOpen="False" MaxHeight="300">
+                        <Border Background="White" BorderBrush="#D0D0D0" BorderThickness="1"
+                                CornerRadius="8" Margin="0,4,0,0">
+                            <Border.Effect>
+                                <DropShadowEffect BlurRadius="12" Opacity="0.2" ShadowDepth="4"/>
+                            </Border.Effect>
+                            <ListBox x:Name="SuggestionsList" MinWidth="420"
+                                     Background="Transparent" BorderThickness="0"
+                                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                     SelectionChanged="SuggestionsList_SelectionChanged"
+                                     MouseLeftButtonDown="SuggestionsList_MouseLeftButtonDown">
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <StackPanel Orientation="Horizontal" Margin="10,7">
+                                            <TextBlock Text="{Binding Icon}" FontSize="14"
+                                                       VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                            <StackPanel>
+                                                <TextBlock Text="{Binding Title}" FontSize="13"
+                                                           Foreground="#333" TextTrimming="CharacterEllipsis"/>
+                                                <TextBlock Text="{Binding Url}" FontSize="11"
+                                                           Foreground="#999" TextTrimming="CharacterEllipsis"
+                                                           Visibility="{Binding ShowUrl}"/>
+                                            </StackPanel>
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+                        </Border>
+                    </Popup>
+                </Grid>
+
+                <!-- Action buttons -->
+                <Button Grid.Column="5" Content="☆" Command="{Binding AddBookmarkCommand}"
+                        ToolTip="添加书签 (Ctrl+D)"
+                        Style="{StaticResource ActionButtonStyle}" FontSize="18"/>
+                <Button Grid.Column="6" Content="≡" Command="{Binding ToggleBookmarkSidebarCommand}"
+                        ToolTip="书签栏"
+                        Style="{StaticResource ActionButtonStyle}" FontSize="18"/>
+                <Button Grid.Column="7" Content="↻" Command="{Binding ToggleHistoryPanelCommand}"
+                        ToolTip="历史记录"
+                        Style="{StaticResource ActionButtonStyle}" FontSize="18"/>
+                <Button Grid.Column="8" Content="⚙" Command="{Binding OpenSettingsCommand}"
+                        ToolTip="设置"
+                        Style="{StaticResource ActionButtonStyle}" FontSize="18"/>
             </Grid>
         </Border>
 
         <!-- Bookmarks Bar -->
         <Border x:Name="BookmarksBarBorder" Grid.Row="2"
-                Background="#FAFAFA" BorderBrush="#E0E0E0" BorderThickness="0,1" Padding="8,2">
+                Background="#F0F0F0" BorderBrush="#E0E0E0" BorderThickness="0,1" Padding="8,2">
             <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
                 <StackPanel x:Name="BookmarksBarItems" Orientation="Horizontal"/>
             </ScrollViewer>
@@ -149,7 +250,8 @@
                 <views:BookmarkSidebar x:Name="BookmarkSidebarControl"/>
             </Border>
 
-            <views:BrowserView x:Name="BrowserViewControl" Grid.Column="1"/>
+            <!-- Tab content container: hosts multiple BrowserView instances -->
+            <Grid x:Name="TabContentContainer" Grid.Column="1"/>
 
             <Border Grid.Column="2" Width="300"
                     Visibility="{Binding IsHistoryPanelVisible, Converter={StaticResource BoolToVisibilityConverter}}"

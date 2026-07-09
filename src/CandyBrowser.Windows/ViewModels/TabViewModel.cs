@@ -30,7 +30,7 @@ public partial class TabViewModel : ObservableObject
     {
         Tab = tab;
         Url = tab.Url;
-        Title = tab.Title ?? "New Tab";
+        Title = tab.Title ?? "新标签页";
     }
 
     [RelayCommand]

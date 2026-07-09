@@ -10,6 +10,8 @@ public partial class SettingsWindow : Window
     private readonly IHistoryService _historyService;
     private readonly IPasswordService _passwordService;
 
+    public static event EventHandler? SettingsChanged;
+
     public SettingsWindow(ISettingsService settingsService, IHistoryService historyService, IPasswordService passwordService)
     {
         InitializeComponent();
@@ -110,6 +112,7 @@ public partial class SettingsWindow : Window
         await _settingsService.SetAsync("show_bookmarks_bar", ShowBookmarksBarCheckBox.IsChecked.ToString() ?? "true");
         await _settingsService.SetAsync("show_status_bar", ShowStatusBarCheckBox.IsChecked.ToString() ?? "true");
 
+        SettingsChanged?.Invoke(this, EventArgs.Empty);
         MessageBox.Show("设置已保存", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
     }
 

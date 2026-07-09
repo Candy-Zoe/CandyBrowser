@@ -48,7 +48,14 @@ public partial class App : Application
                 services.AddTransient<ViewModels.MainViewModel>();
 
                 // Windows
-                services.AddTransient<MainWindow>();
+                services.AddTransient<MainWindow>(sp =>
+                {
+                    var vm = sp.GetRequiredService<ViewModels.MainViewModel>();
+                    var bookmarkService = sp.GetRequiredService<IBookmarkService>();
+                    var downloadService = sp.GetRequiredService<IDownloadService>();
+                    var historyService = sp.GetRequiredService<IHistoryService>();
+                    return new MainWindow(vm, bookmarkService, downloadService, historyService);
+                });
             })
             .Build();
     }

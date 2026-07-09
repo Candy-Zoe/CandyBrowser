@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Collections.Specialized;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using CandyBrowser.Shared.Abstractions;
@@ -51,6 +52,11 @@ public partial class MainViewModel : ObservableObject
     private string _windowTitle = "CandyZoe浏览器";
 
     public ObservableCollection<Models.TabInfo> Tabs { get; } = new();
+
+    // Events for View layer to react to tab changes
+    public event EventHandler<Models.TabInfo>? TabCreated;
+    public event EventHandler<Models.TabInfo>? TabClosed;
+    public event EventHandler? BookmarksChanged;
 
     public MainViewModel(
         ITabManager tabManager,
@@ -106,6 +112,7 @@ public partial class MainViewModel : ObservableObject
         AddressBarText = homepage;
         CurrentUrl = homepage;
         UpdateWindowTitle();
+        TabCreated?.Invoke(this, tab);
     }
 
     public async Task CreateNewTabWithUrl(string url)
@@ -116,6 +123,7 @@ public partial class MainViewModel : ObservableObject
         AddressBarText = url;
         CurrentUrl = url;
         UpdateWindowTitle();
+        TabCreated?.Invoke(this, tab);
     }
 
     [RelayCommand]
@@ -123,6 +131,7 @@ public partial class MainViewModel : ObservableObject
     {
         await _tabManager.CloseAsync(tab.Id);
         Tabs.Remove(tab);
+        TabClosed?.Invoke(this, tab);
 
         if (Tabs.Count == 0)
         {
@@ -150,7 +159,9 @@ public partial class MainViewModel : ObservableObject
             }
             else
             {
-                url = "https://www.bing.com/search?q=" + Uri.EscapeDataString(url);
+                // Use configured search engine
+                var searchEngine = _settingsService.GetSearchEngineAsync().Result;
+                url = string.Format(searchEngine, Uri.EscapeDataString(url));
             }
         }
 
@@ -234,6 +245,8 @@ public partial class MainViewModel : ObservableObject
             Title = CurrentTitle,
             Url = CurrentUrl
         });
+
+        BookmarksChanged?.Invoke(this, EventArgs.Empty);
     }
 
     [RelayCommand]
@@ -299,7 +312,7 @@ public partial class MainViewModel : ObservableObject
     {
         if (System.Windows.Application.Current.MainWindow is MainWindow mainWindow)
         {
-            mainWindow.BrowserViewControl.OpenDevTools();
+            mainWindow.GetActiveBrowserView()?.OpenDevTools();
         }
     }
 }
