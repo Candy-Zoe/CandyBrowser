@@ -75,10 +75,12 @@ public partial class BrowserView : UserControl
             WebView.CoreWebView2.Settings.IsZoomControlEnabled = true;
             WebView.CoreWebView2.Settings.AreDefaultContextMenusEnabled = true;
 
+            WebView.CoreWebView2.NewWindowRequested += CoreWebView2_NewWindowRequested;
+            WebView.CoreWebView2.ProcessFailed += CoreWebView2_ProcessFailed;
+
             _isInitialized = true;
             LoadingOverlay.Visibility = Visibility.Collapsed;
 
-            // 如果有等待的 URL，现在导航
             if (!string.IsNullOrEmpty(_pendingUrl))
             {
                 WebView.CoreWebView2.Navigate(_pendingUrl);
@@ -87,20 +89,20 @@ public partial class BrowserView : UserControl
         }
         catch (Exception ex)
         {
-            StatusText.Text = $"初始化失败: {ex.Message}";
+            try { StatusText.Text = $"初始化失败: {ex.Message}"; } catch { }
         }
     }
 
     private void WebView_NavigationStarting(object? sender, CoreWebView2NavigationStartingEventArgs e)
     {
-        LoadingOverlay.Visibility = Visibility.Visible;
-        LoadingBar.IsIndeterminate = true;
-        StatusText.Text = $"正在加载: {e.Uri}";
-
-        if (DataContext is ViewModels.TabViewModel tabVm)
+        if (_isDisposed) return;
+        try
         {
-            tabVm.Url = e.Uri;
+            LoadingOverlay.Visibility = Visibility.Visible;
+            LoadingBar.IsIndeterminate = true;
+            StatusText.Text = $"正在加载: {e.Uri}";
         }
+        catch { }
     }
 
     private void WebView_NavigationCompleted(object? sender, CoreWebView2NavigationCompletedEventArgs e)
@@ -111,81 +113,48 @@ public partial class BrowserView : UserControl
         {
             LoadingOverlay.Visibility = Visibility.Collapsed;
             LoadingBar.IsIndeterminate = false;
+        }
+        catch { }
 
-            if (e.IsSuccess)
-            {
-                StatusText.Text = "就绪";
-            }
-            else
-            {
-                StatusText.Text = $"加载失败: {e.WebErrorStatus}";
-            }
-
+        try
+        {
             if (WebView.CoreWebView2 == null) return;
 
             var url = WebView.Source?.ToString() ?? string.Empty;
-            var title = WebView.CoreWebView2.DocumentTitle ?? string.Empty;
+            var title = string.Empty;
+            try { title = WebView.CoreWebView2.DocumentTitle ?? string.Empty; } catch { }
 
-            if (DataContext is ViewModels.TabViewModel tabVm)
-            {
-                tabVm.Title = title;
-                tabVm.Url = url;
-            }
+            StatusText.Text = e.IsSuccess ? "就绪" : "加载失败";
 
-            if (FindParentWindow() is MainWindow mainWindow)
+            if (FindParentWindow() is MainWindow mainWindow && mainWindow.DataContext is ViewModels.MainViewModel mainVm)
             {
-                var mainVm = mainWindow.DataContext as ViewModels.MainViewModel;
-                mainVm?.UpdateCurrentTabInfo(url, title);
+                mainVm.UpdateCurrentTabInfo(url, title);
             }
         }
         catch (ObjectDisposedException) { }
         catch (InvalidOperationException) { }
+        catch { }
     }
 
     private void WebView_SourceChanged(object? sender, CoreWebView2SourceChangedEventArgs e)
     {
         if (_isDisposed) return;
-        try
-        {
-            if (DataContext is ViewModels.TabViewModel tabVm)
-            {
-                tabVm.Url = WebView.Source?.ToString() ?? string.Empty;
-            }
-        }
-        catch { }
     }
 
     private void WebView_WebMessageReceived(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
     {
-        var message = e.WebMessageAsJson;
-        Debug.WriteLine($"WebView2 message: {message}");
-    }
-
-    private void WebView_CoreWebView2InitializationCompleted(object? sender, CoreWebView2InitializationCompletedEventArgs e)
-    {
-        if (!e.IsSuccess)
-        {
-            StatusText.Text = $"WebView2 初始化失败: {e.InitializationException?.Message}";
-            return;
-        }
-
-        WebView.CoreWebView2.NewWindowRequested += CoreWebView2_NewWindowRequested;
-        WebView.CoreWebView2.ProcessFailed += CoreWebView2_ProcessFailed;
-        WebView.CoreWebView2.DownloadStarting += CoreWebView2_DownloadStarting;
+        // ignored
     }
 
     private void CoreWebView2_NewWindowRequested(object? sender, CoreWebView2NewWindowRequestedEventArgs e)
     {
         if (_isDisposed) return;
-
         try
         {
             e.Handled = true;
-
-            if (FindParentWindow() is MainWindow mainWindow)
+            if (FindParentWindow() is MainWindow mainWindow && mainWindow.DataContext is ViewModels.MainViewModel mainVm)
             {
-                var mainVm = mainWindow.DataContext as ViewModels.MainViewModel;
-                mainVm?.CreateNewTabWithUrl(e.Uri);
+                mainVm.CreateNewTabWithUrl(e.Uri);
             }
         }
         catch { }
@@ -194,116 +163,115 @@ public partial class BrowserView : UserControl
     private void CoreWebView2_ProcessFailed(object? sender, CoreWebView2ProcessFailedEventArgs e)
     {
         if (_isDisposed) return;
-
-        Dispatcher.BeginInvoke(new Action(() =>
+        try
         {
-            try
+            Dispatcher.BeginInvoke(new Action(() =>
             {
-                StatusText.Text = $"进程异常: {e.Reason}";
-            }
-            catch { }
-        }));
-    }
-
-    private async void CoreWebView2_DownloadStarting(object? sender, CoreWebView2DownloadStartingEventArgs e)
-    {
-        var downloadOperation = e.DownloadOperation;
-        var uri = downloadOperation.Uri;
-        var suggestedFileName = Path.GetFileName(new Uri(uri).LocalPath);
-
-        if (string.IsNullOrEmpty(suggestedFileName))
-        {
-            suggestedFileName = "download";
+                try { StatusText.Text = "页面加载异常"; } catch { }
+            }));
         }
-
-        var saveDialog = new Microsoft.Win32.SaveFileDialog
-        {
-            FileName = suggestedFileName,
-            Filter = "所有文件|*.*"
-        };
-
-        if (saveDialog.ShowDialog() == true)
-        {
-            e.ResultFilePath = saveDialog.FileName;
-            StatusText.Text = $"正在下载: {suggestedFileName}";
-        }
-        else
-        {
-            e.Cancel = true;
-        }
+        catch { }
     }
 
     private MainWindow? FindParentWindow()
     {
-        var parent = VisualTreeHelper.GetParent(this);
-        while (parent != null && parent is not MainWindow)
+        try
         {
-            parent = VisualTreeHelper.GetParent(parent);
+            var parent = VisualTreeHelper.GetParent(this);
+            while (parent != null && parent is not MainWindow)
+            {
+                parent = VisualTreeHelper.GetParent(parent);
+            }
+            return parent as MainWindow;
         }
-        return parent as MainWindow;
+        catch { return null; }
     }
 
     public void NavigateTo(string url)
     {
-        if (_isInitialized && WebView.CoreWebView2 != null)
+        if (_isDisposed || string.IsNullOrEmpty(url)) return;
+
+        try
         {
-            WebView.CoreWebView2.Navigate(url);
+            if (_isInitialized && WebView.CoreWebView2 != null)
+            {
+                WebView.CoreWebView2.Navigate(url);
+            }
+            else
+            {
+                // WebView2 not ready yet, queue the navigation
+                _pendingUrl = url;
+            }
         }
-        else
+        catch (Exception ex)
         {
-            // 保存 URL，等 WebView2 初始化后再导航
-            _pendingUrl = url;
+            try { StatusText.Text = $"导航失败: {ex.Message}"; } catch { }
         }
     }
 
     public void GoBack()
     {
-        if (WebView.CoreWebView2?.CanGoBack == true)
+        try
         {
-            WebView.CoreWebView2.GoBack();
+            if (WebView.CoreWebView2?.CanGoBack == true)
+                WebView.CoreWebView2.GoBack();
         }
+        catch { }
     }
 
     public void GoForward()
     {
-        if (WebView.CoreWebView2?.CanGoForward == true)
+        try
         {
-            WebView.CoreWebView2.GoForward();
+            if (WebView.CoreWebView2?.CanGoForward == true)
+                WebView.CoreWebView2.GoForward();
         }
+        catch { }
     }
 
     public void Refresh()
     {
-        WebView.Reload();
+        try
+        {
+            if (WebView.CoreWebView2 != null)
+                WebView.Reload();
+        }
+        catch { }
     }
 
     public void Stop()
     {
-        WebView.CoreWebView2?.Stop();
+        try { WebView.CoreWebView2?.Stop(); } catch { }
     }
 
     public void OpenDevTools()
     {
-        WebView.CoreWebView2?.OpenDevToolsWindow();
+        try { WebView.CoreWebView2?.OpenDevToolsWindow(); } catch { }
     }
 
     private void GoBack_Click(object sender, RoutedEventArgs e) => GoBack();
     private void GoForward_Click(object sender, RoutedEventArgs e) => GoForward();
     private void Refresh_Click(object sender, RoutedEventArgs e) => Refresh();
 
-    private void OpenInNewTab_Click(object sender, RoutedEventArgs e) { }
+    private void OpenInNewTab_Click(object sender, RoutedEventArgs e)
+    {
+        // TODO: get link from context menu target
+    }
+
     private void CopyLink_Click(object sender, RoutedEventArgs e)
     {
         try
         {
-            if (!string.IsNullOrEmpty(WebView.Source?.ToString()))
+            var url = WebView.Source?.ToString();
+            if (!string.IsNullOrEmpty(url))
             {
-                Clipboard.SetText(WebView.Source.ToString());
+                Clipboard.SetText(url);
                 StatusText.Text = "链接已复制";
             }
         }
         catch { }
     }
+
     private void DevTools_Click(object sender, RoutedEventArgs e) => OpenDevTools();
 
     public void Dispose()
@@ -315,7 +283,6 @@ public partial class BrowserView : UserControl
             {
                 WebView.CoreWebView2.NewWindowRequested -= CoreWebView2_NewWindowRequested;
                 WebView.CoreWebView2.ProcessFailed -= CoreWebView2_ProcessFailed;
-                WebView.CoreWebView2.DownloadStarting -= CoreWebView2_DownloadStarting;
             }
             WebView.Dispose();
         }

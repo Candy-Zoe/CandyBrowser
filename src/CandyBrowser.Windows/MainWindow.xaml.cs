@@ -49,13 +49,8 @@ public partial class MainWindow : Window
             vm.TabClosed += Vm_TabClosed;
             vm.BookmarksChanged += async (_, _) => await LoadBookmarksBarAsync();
 
+            // Subscribe BEFORE InitializeAsync so TabCreated events are caught
             await vm.InitializeAsync();
-
-            // Create initial tab views for any tabs loaded from DB
-            foreach (var tab in vm.Tabs)
-            {
-                CreateTabView(tab);
-            }
 
             // Show the selected tab
             if (vm.SelectedTab != null)
@@ -201,6 +196,22 @@ public partial class MainWindow : Window
     }
 
     public BrowserView? GetActiveBrowserView() => _activeBrowserView;
+
+    public void NavigateActiveTab(string url)
+    {
+        if (_activeBrowserView != null)
+        {
+            _activeBrowserView.NavigateTo(url);
+        }
+        else if (_activeNewTabPage != null)
+        {
+            // If current tab is a NewTabPage, replace it with BrowserView
+            if (DataContext is MainViewModel vm && vm.SelectedTab != null)
+            {
+                ReplaceNewTabWithBrowser(vm.SelectedTab.Id, url);
+            }
+        }
+    }
 
     private async Task LoadBookmarksBarAsync()
     {
@@ -494,15 +505,9 @@ public partial class MainWindow : Window
 
         if (DataContext is MainViewModel vm)
         {
-            if (suggestion.Type == 2) // Search
-            {
-                vm.AddressBarText = suggestion.Url;
-                vm.NavigateToUrlCommand.Execute(null);
-            }
-            else
-            {
-                vm.CreateNewTabWithUrl(suggestion.Url);
-            }
+            // Always navigate in current tab
+            vm.AddressBarText = suggestion.Url;
+            vm.NavigateToUrlCommand.Execute(null);
         }
 
         _activeBrowserView?.Focus();

@@ -25,23 +25,28 @@ public partial class App : Application
         _host = Host.CreateDefaultBuilder()
             .ConfigureServices((context, services) =>
             {
-                // Database
+                // Database - use absolute path in AppData
+                var dbPath = System.IO.Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "CandyBrowser", "candybrowser.db");
+                System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(dbPath)!);
                 services.AddDbContext<BrowserDbContext>(options =>
-                    options.UseSqlite("Data Source=candybrowser.db"));
+                    options.UseSqlite($"Data Source={dbPath}"),
+                    ServiceLifetime.Singleton);
 
-                // Services
-                services.AddScoped<IBookmarkService, BookmarkService>();
-                services.AddScoped<IHistoryService, HistoryService>();
-                services.AddScoped<IPasswordService>(sp =>
+                // Services - use Singleton to avoid scope issues
+                services.AddSingleton<IBookmarkService, BookmarkService>();
+                services.AddSingleton<IHistoryService, HistoryService>();
+                services.AddSingleton<IPasswordService>(sp =>
                 {
                     var db = sp.GetRequiredService<BrowserDbContext>();
                     var masterKey = CryptoService.GetOrCreateMasterKey();
                     return new PasswordService(db, masterKey);
                 });
-                services.AddScoped<ITabManager, TabService>();
-                services.AddScoped<ISettingsService, SettingsService>();
+                services.AddSingleton<ITabManager, TabService>();
+                services.AddSingleton<ISettingsService, SettingsService>();
                 services.AddSingleton<INavigationService, NavigationService>();
-                services.AddScoped<IExtensionService, ExtensionService>();
+                services.AddSingleton<IExtensionService, ExtensionService>();
                 services.AddSingleton<IDownloadService, DownloadService>();
 
                 // ViewModels

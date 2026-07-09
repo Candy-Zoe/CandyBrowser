@@ -149,9 +149,15 @@ public partial class SettingsWindow : Window
 
     private void BrowseDownloadPath_Click(object sender, RoutedEventArgs e)
     {
-        // 使用默认下载文件夹
-        var downloadsPath = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile) + "\\Downloads";
-        DownloadPathTextBox.Text = downloadsPath;
+        var dialog = new Microsoft.Win32.OpenFolderDialog
+        {
+            Title = "选择下载文件夹"
+        };
+
+        if (dialog.ShowDialog() == true)
+        {
+            DownloadPathTextBox.Text = dialog.FolderName;
+        }
     }
 
     private void FontSizeSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)

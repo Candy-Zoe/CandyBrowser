@@ -18,8 +18,7 @@
                           NavigationStarting="WebView_NavigationStarting"
                           NavigationCompleted="WebView_NavigationCompleted"
                           WebMessageReceived="WebView_WebMessageReceived"
-                          SourceChanged="WebView_SourceChanged"
-                          CoreWebView2InitializationCompleted="WebView_CoreWebView2InitializationCompleted"/>
+                          SourceChanged="WebView_SourceChanged"/>
 
             <!-- Loading Overlay -->
             <Border x:Name="LoadingOverlay" Background="White" Visibility="Visible">

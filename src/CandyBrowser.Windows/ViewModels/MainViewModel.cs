@@ -153,8 +153,8 @@ public partial class MainViewModel : ObservableObject
         var input = AddressBarText.Trim();
         var url = NormalizeUrl(input);
 
-        _navigationService.Navigate(url);
         AddressBarText = url;
+        CurrentUrl = url;
 
         if (SelectedTab != null)
         {
@@ -163,6 +163,12 @@ public partial class MainViewModel : ObservableObject
         }
 
         _ = _historyService.AddAsync(url, CurrentTitle);
+
+        // Tell MainWindow to navigate the active BrowserView
+        if (System.Windows.Application.Current.MainWindow is MainWindow mainWindow)
+        {
+            mainWindow.NavigateActiveTab(url);
+        }
     }
 
     private async Task<string> NormalizeUrlAsync(string input)
@@ -215,16 +221,32 @@ public partial class MainViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private void GoBack() => _navigationService.GoBack();
+    private void GoBack()
+    {
+        if (System.Windows.Application.Current.MainWindow is MainWindow mainWindow)
+            mainWindow.GetActiveBrowserView()?.GoBack();
+    }
 
     [RelayCommand]
-    private void GoForward() => _navigationService.GoForward();
+    private void GoForward()
+    {
+        if (System.Windows.Application.Current.MainWindow is MainWindow mainWindow)
+            mainWindow.GetActiveBrowserView()?.GoForward();
+    }
 
     [RelayCommand]
-    private void Reload() => _navigationService.Reload();
+    private void Reload()
+    {
+        if (System.Windows.Application.Current.MainWindow is MainWindow mainWindow)
+            mainWindow.GetActiveBrowserView()?.Refresh();
+    }
 
     [RelayCommand]
-    private void Stop() => _navigationService.Stop();
+    private void Stop()
+    {
+        if (System.Windows.Application.Current.MainWindow is MainWindow mainWindow)
+            mainWindow.GetActiveBrowserView()?.Stop();
+    }
 
     [RelayCommand]
     private void ToggleBookmarkSidebar() => IsBookmarkSidebarVisible = !IsBookmarkSidebarVisible;
@@ -290,13 +312,18 @@ public partial class MainViewModel : ObservableObject
     private async Task OpenHomepageAsync()
     {
         var homepage = await _settingsService.GetHomepageAsync();
-        _navigationService.Navigate(homepage);
         AddressBarText = homepage;
+        CurrentUrl = homepage;
 
         if (SelectedTab != null)
         {
             SelectedTab.Url = homepage;
             _ = _tabManager.UpdateAsync(SelectedTab);
+        }
+
+        if (System.Windows.Application.Current.MainWindow is MainWindow mainWindow)
+        {
+            mainWindow.NavigateActiveTab(homepage);
         }
     }
 
