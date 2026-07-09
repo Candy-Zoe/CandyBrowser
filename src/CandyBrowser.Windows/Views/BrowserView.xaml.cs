@@ -176,18 +176,33 @@ public partial class BrowserView : UserControl
 
     private void CoreWebView2_NewWindowRequested(object? sender, CoreWebView2NewWindowRequestedEventArgs e)
     {
-        e.Handled = true;
+        if (_isDisposed) return;
 
-        if (FindParentWindow() is MainWindow mainWindow)
+        try
         {
-            var mainVm = mainWindow.DataContext as ViewModels.MainViewModel;
-            mainVm?.CreateNewTabWithUrl(e.Uri);
+            e.Handled = true;
+
+            if (FindParentWindow() is MainWindow mainWindow)
+            {
+                var mainVm = mainWindow.DataContext as ViewModels.MainViewModel;
+                mainVm?.CreateNewTabWithUrl(e.Uri);
+            }
         }
+        catch { }
     }
 
     private void CoreWebView2_ProcessFailed(object? sender, CoreWebView2ProcessFailedEventArgs e)
     {
-        StatusText.Text = $"进程异常: {e.Reason}";
+        if (_isDisposed) return;
+
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            try
+            {
+                StatusText.Text = $"进程异常: {e.Reason}";
+            }
+            catch { }
+        }));
     }
 
     private async void CoreWebView2_DownloadStarting(object? sender, CoreWebView2DownloadStartingEventArgs e)
