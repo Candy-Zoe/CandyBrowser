@@ -105,37 +105,54 @@ public partial class BrowserView : UserControl
 
     private void WebView_NavigationCompleted(object? sender, CoreWebView2NavigationCompletedEventArgs e)
     {
-        LoadingOverlay.Visibility = Visibility.Collapsed;
-        LoadingBar.IsIndeterminate = false;
+        if (_isDisposed) return;
 
-        if (e.IsSuccess)
+        try
         {
-            StatusText.Text = "就绪";
-        }
-        else
-        {
-            StatusText.Text = $"加载失败: {e.WebErrorStatus}";
-        }
+            LoadingOverlay.Visibility = Visibility.Collapsed;
+            LoadingBar.IsIndeterminate = false;
 
-        if (DataContext is ViewModels.TabViewModel tabVm)
-        {
-            tabVm.Title = WebView.CoreWebView2.DocumentTitle;
-            tabVm.Url = WebView.Source.ToString();
-        }
+            if (e.IsSuccess)
+            {
+                StatusText.Text = "就绪";
+            }
+            else
+            {
+                StatusText.Text = $"加载失败: {e.WebErrorStatus}";
+            }
 
-        if (FindParentWindow() is MainWindow mainWindow)
-        {
-            var mainVm = mainWindow.DataContext as ViewModels.MainViewModel;
-            mainVm?.UpdateCurrentTabInfo(WebView.Source.ToString(), WebView.CoreWebView2.DocumentTitle);
+            if (WebView.CoreWebView2 == null) return;
+
+            var url = WebView.Source?.ToString() ?? string.Empty;
+            var title = WebView.CoreWebView2.DocumentTitle ?? string.Empty;
+
+            if (DataContext is ViewModels.TabViewModel tabVm)
+            {
+                tabVm.Title = title;
+                tabVm.Url = url;
+            }
+
+            if (FindParentWindow() is MainWindow mainWindow)
+            {
+                var mainVm = mainWindow.DataContext as ViewModels.MainViewModel;
+                mainVm?.UpdateCurrentTabInfo(url, title);
+            }
         }
+        catch (ObjectDisposedException) { }
+        catch (InvalidOperationException) { }
     }
 
     private void WebView_SourceChanged(object? sender, CoreWebView2SourceChangedEventArgs e)
     {
-        if (DataContext is ViewModels.TabViewModel tabVm)
+        if (_isDisposed) return;
+        try
         {
-            tabVm.Url = WebView.Source.ToString();
+            if (DataContext is ViewModels.TabViewModel tabVm)
+            {
+                tabVm.Url = WebView.Source?.ToString() ?? string.Empty;
+            }
         }
+        catch { }
     }
 
     private void WebView_WebMessageReceived(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
@@ -262,11 +279,31 @@ public partial class BrowserView : UserControl
     private void OpenInNewTab_Click(object sender, RoutedEventArgs e) { }
     private void CopyLink_Click(object sender, RoutedEventArgs e)
     {
-        if (!string.IsNullOrEmpty(WebView.Source?.ToString()))
+        try
         {
-            Clipboard.SetText(WebView.Source.ToString());
-            StatusText.Text = "链接已复制";
+            if (!string.IsNullOrEmpty(WebView.Source?.ToString()))
+            {
+                Clipboard.SetText(WebView.Source.ToString());
+                StatusText.Text = "链接已复制";
+            }
         }
+        catch { }
     }
     private void DevTools_Click(object sender, RoutedEventArgs e) => OpenDevTools();
+
+    public void Dispose()
+    {
+        _isDisposed = true;
+        try
+        {
+            if (WebView.CoreWebView2 != null)
+            {
+                WebView.CoreWebView2.NewWindowRequested -= CoreWebView2_NewWindowRequested;
+                WebView.CoreWebView2.ProcessFailed -= CoreWebView2_ProcessFailed;
+                WebView.CoreWebView2.DownloadStarting -= CoreWebView2_DownloadStarting;
+            }
+            WebView.Dispose();
+        }
+        catch { }
+    }
 }

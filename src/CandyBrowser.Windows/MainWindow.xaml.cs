@@ -189,6 +189,7 @@ public partial class MainWindow : Window
             TabContentContainer.Children.Remove(view);
             _tabViews.Remove(tabId);
             if (_activeBrowserView == view) _activeBrowserView = null;
+            view.Dispose();
         }
 
         if (_newTabPages.TryGetValue(tabId, out var newTab))

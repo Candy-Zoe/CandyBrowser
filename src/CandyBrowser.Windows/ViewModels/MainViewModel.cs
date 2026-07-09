@@ -150,20 +150,8 @@ public partial class MainViewModel : ObservableObject
     {
         if (string.IsNullOrWhiteSpace(AddressBarText)) return;
 
-        var url = AddressBarText;
-        if (!url.StartsWith("http://") && !url.StartsWith("https://") && !url.StartsWith("about:"))
-        {
-            if (url.Contains('.') && !url.Contains(' '))
-            {
-                url = "https://" + url;
-            }
-            else
-            {
-                // Use configured search engine
-                var searchEngine = _settingsService.GetSearchEngineAsync().Result;
-                url = string.Format(searchEngine, Uri.EscapeDataString(url));
-            }
-        }
+        var input = AddressBarText.Trim();
+        var url = NormalizeUrl(input);
 
         _navigationService.Navigate(url);
         AddressBarText = url;
@@ -175,6 +163,55 @@ public partial class MainViewModel : ObservableObject
         }
 
         _ = _historyService.AddAsync(url, CurrentTitle);
+    }
+
+    private async Task<string> NormalizeUrlAsync(string input)
+    {
+        if (string.IsNullOrWhiteSpace(input)) return input;
+
+        input = input.Trim();
+
+        // Already has protocol
+        if (input.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+            input.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ||
+            input.StartsWith("about:", StringComparison.OrdinalIgnoreCase))
+        {
+            return input;
+        }
+
+        // Looks like a domain (contains dot and no spaces)
+        if (input.Contains('.') && !input.Contains(' '))
+        {
+            return "https://" + input;
+        }
+
+        // Otherwise search
+        var searchEngine = await _settingsService.GetSearchEngineAsync();
+        return string.Format(searchEngine, Uri.EscapeDataString(input));
+    }
+
+    private string NormalizeUrl(string input)
+    {
+        if (string.IsNullOrWhiteSpace(input)) return input;
+
+        input = input.Trim();
+
+        // Already has protocol
+        if (input.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+            input.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ||
+            input.StartsWith("about:", StringComparison.OrdinalIgnoreCase))
+        {
+            return input;
+        }
+
+        // Looks like a domain (contains dot and no spaces)
+        if (input.Contains('.') && !input.Contains(' '))
+        {
+            return "https://" + input;
+        }
+
+        // Otherwise search with Bing as fallback
+        return "https://www.bing.com/search?q=" + Uri.EscapeDataString(input);
     }
 
     [RelayCommand]
