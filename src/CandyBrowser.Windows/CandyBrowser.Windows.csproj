@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <OutputType>WinExe</OutputType>
+    <UseWPF>true</UseWPF>
+    <AssemblyName>CandyBrowser</AssemblyName>
+    <RootNamespace>CandyBrowser.Windows</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2903.40" />
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.0" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="8.0.1" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.1" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\CandyBrowser.Core\CandyBrowser.Core.csproj" />
+    <ProjectReference Include="..\CandyBrowser.Data\CandyBrowser.Data.csproj" />
+    <ProjectReference Include="..\CandyBrowser.Services\CandyBrowser.Services.csproj" />
+    <ProjectReference Include="..\CandyBrowser.Shared.Abstractions\CandyBrowser.Shared.Abstractions.csproj" />
+  </ItemGroup>
+</Project>

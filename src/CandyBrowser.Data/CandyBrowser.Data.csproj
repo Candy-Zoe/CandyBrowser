@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>CandyBrowser.Data</RootNamespace>
+    <AssemblyName>CandyBrowser.Data</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="8.0.11" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="8.0.11">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\CandyBrowser.Core\CandyBrowser.Core.csproj" />
+    <ProjectReference Include="..\CandyBrowser.Shared.Abstractions\CandyBrowser.Shared.Abstractions.csproj" />
+  </ItemGroup>
+</Project>

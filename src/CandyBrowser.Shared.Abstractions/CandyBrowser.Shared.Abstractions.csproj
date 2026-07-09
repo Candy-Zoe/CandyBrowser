@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>CandyBrowser.Shared.Abstractions</RootNamespace>
+    <AssemblyName>CandyBrowser.Shared.Abstractions</AssemblyName>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\CandyBrowser.Core\CandyBrowser.Core.csproj" />
+  </ItemGroup>
+</Project>
