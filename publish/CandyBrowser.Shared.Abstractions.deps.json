@@ -1,0 +1,40 @@
+{
+  "runtimeTarget": {
+    "name": ".NETCoreApp,Version=v8.0/win-x64",
+    "signature": ""
+  },
+  "compilationOptions": {},
+  "targets": {
+    ".NETCoreApp,Version=v8.0": {},
+    ".NETCoreApp,Version=v8.0/win-x64": {
+      "CandyBrowser.Shared.Abstractions/1.0.0": {
+        "dependencies": {
+          "CandyBrowser.Core": "1.0.0"
+        },
+        "runtime": {
+          "CandyBrowser.Shared.Abstractions.dll": {}
+        }
+      },
+      "CandyBrowser.Core/1.0.0": {
+        "runtime": {
+          "CandyBrowser.Core.dll": {
+            "assemblyVersion": "1.0.0.0",
+            "fileVersion": "1.0.0.0"
+          }
+        }
+      }
+    }
+  },
+  "libraries": {
+    "CandyBrowser.Shared.Abstractions/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "CandyBrowser.Core/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    }
+  }
+}

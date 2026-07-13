@@ -2,526 +2,409 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
-using System.Windows.Threading;
-using CandyBrowser.Windows.ViewModels;
-using CandyBrowser.Core.Models;
-using CandyBrowser.Shared.Abstractions;
+using System.IO;
+using System.Diagnostics;
+using Microsoft.Web.WebView2.Core;
+using Microsoft.Web.WebView2.Wpf;
 using CandyBrowser.Windows.Views;
 
 namespace CandyBrowser.Windows;
 
 public partial class MainWindow : Window
 {
-    private readonly IBookmarkService _bookmarkService;
-    private readonly IDownloadService _downloadService;
-    private readonly IHistoryService _historyService;
-    private readonly Dictionary<long, BrowserView> _tabViews = new();
-    private readonly Dictionary<long, NewTabPage> _newTabPages = new();
-    private BrowserView? _activeBrowserView;
-    private NewTabPage? _activeNewTabPage;
-    private readonly DispatcherTimer _suggestionTimer;
-    private bool _isSuggestionActive;
+    private readonly Dictionary<int, WebView2> _tabs = new();
+    private readonly Dictionary<int, string> _tabUrls = new();
+    private readonly Dictionary<int, string> _tabTitles = new();
+    private int _nextTabId = 1;
+    private int _activeTabId = -1;
 
-    public MainWindow(MainViewModel viewModel, IBookmarkService bookmarkService, IDownloadService downloadService, IHistoryService historyService)
+    public MainWindow()
     {
-        _bookmarkService = bookmarkService;
-        _downloadService = downloadService;
-        _historyService = historyService;
-        DataContext = viewModel;
         InitializeComponent();
-
-        _suggestionTimer = new DispatcherTimer
+        Loaded += async (_, _) =>
         {
-            Interval = TimeSpan.FromMilliseconds(200)
+            try
+            {
+                await CreateNewTab();
+                UpdateBookmarksBar();
+                StatusText.Text = "浏览器就绪";
+            }
+            catch (Exception ex)
+            {
+                StatusText.Text = $"初始化错误: {ex.Message}";
+            }
         };
-        _suggestionTimer.Tick += SuggestionTimer_Tick;
-
-        Loaded += MainWindow_Loaded;
-        Views.SettingsWindow.SettingsChanged += SettingsWindow_SettingsChanged;
     }
 
-    private async void MainWindow_Loaded(object sender, RoutedEventArgs e)
+    private async Task CreateNewTab(string? url = null)
     {
-        if (DataContext is MainViewModel vm)
+        var tabId = _nextTabId++;
+        var webView = new WebView2 { Visibility = Visibility.Collapsed };
+
+        try
         {
-            vm.PropertyChanged += Vm_PropertyChanged;
-            vm.TabCreated += Vm_TabCreated;
-            vm.TabClosed += Vm_TabClosed;
-            vm.BookmarksChanged += async (_, _) => await LoadBookmarksBarAsync();
+            var userDataFolder = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "CandyBrowser", "WebView2");
+            Directory.CreateDirectory(userDataFolder);
 
-            // Subscribe BEFORE InitializeAsync so TabCreated events are caught
-            await vm.InitializeAsync();
+            var env = await CoreWebView2Environment.CreateAsync(null, userDataFolder);
+            await webView.EnsureCoreWebView2Async(env);
 
-            // Show the selected tab
-            if (vm.SelectedTab != null)
+            // Handle new window requests
+            webView.CoreWebView2.NewWindowRequested += (_, e) =>
             {
-                ShowTabView(vm.SelectedTab.Id);
-            }
-        }
-
-        await LoadBookmarksBarAsync();
-    }
-
-    private void Vm_PropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
-    {
-        if (e.PropertyName == nameof(MainViewModel.SelectedTab))
-        {
-            if (DataContext is MainViewModel vm && vm.SelectedTab != null)
-            {
-                ShowTabView(vm.SelectedTab.Id);
-            }
-        }
-    }
-
-    private void Vm_TabCreated(object? sender, TabInfo tab)
-    {
-        CreateTabView(tab);
-        ShowTabView(tab.Id);
-    }
-
-    private void Vm_TabClosed(object? sender, TabInfo tab)
-    {
-        RemoveTabView(tab.Id);
-    }
-
-    private void CreateTabView(TabInfo tab)
-    {
-        // Check if this is a new blank tab → show NewTabPage
-        if (string.IsNullOrEmpty(tab.Url) || tab.Url == "about:blank")
-        {
-            if (_newTabPages.ContainsKey(tab.Id)) return;
-
-            var newTab = new NewTabPage();
-            newTab.NavigateRequested += (_, url) =>
-            {
-                // Replace NewTabPage with BrowserView when user navigates
-                ReplaceNewTabWithBrowser(tab.Id, url);
+                e.Handled = true;
+                Dispatcher.Invoke(() => _ = CreateNewTab(e.Uri));
             };
-            _newTabPages[tab.Id] = newTab;
-            TabContentContainer.Children.Add(newTab);
-            newTab.Visibility = Visibility.Collapsed;
-            return;
-        }
 
-        // Regular tab → create BrowserView
-        if (_tabViews.ContainsKey(tab.Id)) return;
-
-        var browserView = new BrowserView();
-        browserView.SetDownloadService(_downloadService);
-        _tabViews[tab.Id] = browserView;
-        TabContentContainer.Children.Add(browserView);
-        browserView.Visibility = Visibility.Collapsed;
-        browserView.NavigateTo(tab.Url);
-    }
-
-    private void ReplaceNewTabWithBrowser(long tabId, string url)
-    {
-        // Remove NewTabPage
-        if (_newTabPages.TryGetValue(tabId, out var newTabPage))
-        {
-            TabContentContainer.Children.Remove(newTabPage);
-            _newTabPages.Remove(tabId);
-        }
-
-        // Create BrowserView
-        var browserView = new BrowserView();
-        browserView.SetDownloadService(_downloadService);
-        _tabViews[tabId] = browserView;
-        TabContentContainer.Children.Add(browserView);
-
-        // Show it
-        HideActiveView();
-        _activeBrowserView = browserView;
-        _activeNewTabPage = null;
-        browserView.Visibility = Visibility.Visible;
-        browserView.NavigateTo(url);
-
-        // Update ViewModel
-        if (DataContext is MainViewModel vm)
-        {
-            vm.AddressBarText = url;
-            if (vm.SelectedTab != null && vm.SelectedTab.Id == tabId)
+            // Track navigation
+            webView.NavigationStarting += (_, e) =>
             {
-                vm.SelectedTab.Url = url;
-            }
-        }
-    }
-
-    private void ShowTabView(long tabId)
-    {
-        HideActiveView();
-
-        // Check if it's a NewTabPage
-        if (_newTabPages.TryGetValue(tabId, out var newTab))
-        {
-            _activeNewTabPage = newTab;
-            _activeBrowserView = null;
-            newTab.Visibility = Visibility.Visible;
-            return;
-        }
-
-        // Check if it's a BrowserView
-        if (_tabViews.TryGetValue(tabId, out var view))
-        {
-            _activeBrowserView = view;
-            _activeNewTabPage = null;
-            view.Visibility = Visibility.Visible;
-        }
-    }
-
-    private void HideActiveView()
-    {
-        if (_activeBrowserView != null)
-            _activeBrowserView.Visibility = Visibility.Collapsed;
-        if (_activeNewTabPage != null)
-            _activeNewTabPage.Visibility = Visibility.Collapsed;
-    }
-
-    public void RemoveTabView(long tabId)
-    {
-        if (_tabViews.TryGetValue(tabId, out var view))
-        {
-            TabContentContainer.Children.Remove(view);
-            _tabViews.Remove(tabId);
-            if (_activeBrowserView == view) _activeBrowserView = null;
-            view.Dispose();
-        }
-
-        if (_newTabPages.TryGetValue(tabId, out var newTab))
-        {
-            TabContentContainer.Children.Remove(newTab);
-            _newTabPages.Remove(tabId);
-            if (_activeNewTabPage == newTab) _activeNewTabPage = null;
-        }
-    }
-
-    public BrowserView? GetActiveBrowserView() => _activeBrowserView;
-
-    public void NavigateActiveTab(string url)
-    {
-        if (_activeBrowserView != null)
-        {
-            _activeBrowserView.NavigateTo(url);
-        }
-        else if (_activeNewTabPage != null)
-        {
-            // If current tab is a NewTabPage, replace it with BrowserView
-            if (DataContext is MainViewModel vm && vm.SelectedTab != null)
-            {
-                ReplaceNewTabWithBrowser(vm.SelectedTab.Id, url);
-            }
-        }
-    }
-
-    private async Task LoadBookmarksBarAsync()
-    {
-        BookmarksBarItems.Children.Clear();
-
-        var bookmarks = await _bookmarkService.GetAllAsync();
-        var barBookmarks = bookmarks.Where(b => !b.IsFolder).Take(20);
-
-        foreach (var bookmark in barBookmarks)
-        {
-            var button = new Button
-            {
-                Content = new StackPanel
+                Dispatcher.Invoke(() =>
                 {
-                    Orientation = Orientation.Horizontal,
-                    Children =
+                    if (!_tabs.ContainsKey(tabId)) return;
+                    _tabUrls[tabId] = e.Uri;
+                    if (tabId == _activeTabId)
                     {
-                        new TextBlock
+                        AddressBar.Text = e.Uri;
+                        StatusText.Text = $"加载: {e.Uri}";
+                    }
+                });
+            };
+
+            webView.NavigationCompleted += (_, e) =>
+            {
+                Dispatcher.Invoke(() =>
+                {
+                    if (!_tabs.ContainsKey(tabId)) return;
+                    try
+                    {
+                        var title = webView.CoreWebView2?.DocumentTitle ?? "新标签页";
+                        _tabTitles[tabId] = title;
+                        RefreshTabStrip();
+                        if (tabId == _activeTabId)
                         {
-                            Text = GetIconForUrl(bookmark.Url),
-                            FontSize = 12,
-                            Margin = new Thickness(0, 0, 6, 0),
-                            VerticalAlignment = VerticalAlignment.Center
-                        },
-                        new TextBlock
+                            Title = $"CandyZoe - {title}";
+                            StatusText.Text = e.IsSuccess ? "就绪" : "加载失败";
+                        }
+
+                        // Record history
+                        if (e.IsSuccess && !string.IsNullOrEmpty(_tabUrls[tabId]))
                         {
-                            Text = bookmark.Title,
-                            FontSize = 12,
-                            MaxWidth = 120,
-                            TextTrimming = TextTrimming.CharacterEllipsis,
-                            VerticalAlignment = VerticalAlignment.Center
+                            var historyUrl = _tabUrls[tabId];
+                            if (!historyUrl.StartsWith("about:"))
+                            {
+                                App.AddHistory(historyUrl, title);
+                            }
                         }
                     }
-                },
-                ToolTip = $"{bookmark.Title}\n{bookmark.Url}",
-                Background = Brushes.Transparent,
-                BorderThickness = new Thickness(1),
-                BorderBrush = Brushes.Transparent,
-                Padding = new Thickness(8, 4, 8, 4),
-                Margin = new Thickness(2, 0, 2, 0),
+                    catch { }
+                });
+            };
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"标签初始化失败: {ex.Message}";
+            return;
+        }
+
+        _tabs[tabId] = webView;
+        _tabUrls[tabId] = url ?? "";
+        _tabTitles[tabId] = "新标签页";
+        TabContentContainer.Children.Add(webView);
+        RefreshTabStrip();
+        SelectTab(tabId);
+
+        if (!string.IsNullOrEmpty(url))
+        {
+            webView.CoreWebView2?.Navigate(url);
+        }
+    }
+
+    private void SelectTab(int tabId)
+    {
+        if (!_tabs.ContainsKey(tabId)) return;
+
+        // Hide all tabs
+        foreach (var w in _tabs.Values)
+            w.Visibility = Visibility.Collapsed;
+
+        // Show selected tab
+        _activeTabId = tabId;
+        _tabs[tabId].Visibility = Visibility.Visible;
+
+        // Update UI
+        AddressBar.Text = _tabUrls.GetValueOrDefault(tabId, "");
+        Title = $"CandyZoe - {_tabTitles.GetValueOrDefault(tabId, "新标签页")}";
+        StatusText.Text = "就绪";
+
+        RefreshTabStrip();
+    }
+
+    private void CloseTab(int tabId)
+    {
+        if (!_tabs.ContainsKey(tabId)) return;
+
+        var w = _tabs[tabId];
+        TabContentContainer.Children.Remove(w);
+        try { w.Dispose(); } catch { }
+
+        _tabs.Remove(tabId);
+        _tabUrls.Remove(tabId);
+        _tabTitles.Remove(tabId);
+
+        if (_tabs.Count == 0)
+        {
+            _ = CreateNewTab();
+        }
+        else if (_activeTabId == tabId)
+        {
+            SelectTab(_tabs.Keys.Last());
+        }
+        else
+        {
+            RefreshTabStrip();
+        }
+    }
+
+    private void RefreshTabStrip()
+    {
+        TabStrip.Children.Clear();
+
+        foreach (var tabId in _tabs.Keys)
+        {
+            var title = _tabTitles.GetValueOrDefault(tabId, "新标签页");
+            if (title.Length > 20) title = title[..20] + "...";
+
+            // Create tab border
+            var tabBorder = new Border
+            {
+                Background = tabId == _activeTabId ? Brushes.White : new SolidColorBrush(Color.FromRgb(0xC0, 0xC0, 0xC0)),
+                Padding = new Thickness(8, 4, 4, 4),
+                Margin = new Thickness(1, 0, 0, 0),
                 Cursor = Cursors.Hand,
-                Tag = bookmark
+                MinWidth = 80,
+                MaxWidth = 200
             };
 
-            button.Click += BookmarkBar_Click;
-            button.MouseEnter += BookmarkBar_MouseEnter;
-            button.MouseLeave += BookmarkBar_MouseLeave;
+            var panel = new DockPanel();
 
-            BookmarksBarItems.Children.Add(button);
+            // Close button
+            var closeBtn = new Button
+            {
+                Content = "✕",
+                FontSize = 10,
+                Width = 18,
+                Height = 18,
+                Margin = new Thickness(4, 0, 0, 0),
+                Cursor = Cursors.Hand,
+                Background = Brushes.Transparent,
+                BorderThickness = new Thickness(0),
+                VerticalAlignment = VerticalAlignment.Center
+            };
+
+            int capturedTabId = tabId;
+            closeBtn.Click += (s, e) =>
+            {
+                e.Handled = true;
+                CloseTab(capturedTabId);
+            };
+
+            DockPanel.SetDock(closeBtn, Dock.Right);
+            panel.Children.Add(closeBtn);
+
+            // Tab title
+            var titleBlock = new TextBlock
+            {
+                Text = title,
+                FontSize = 12,
+                VerticalAlignment = VerticalAlignment.Center,
+                TextTrimming = TextTrimming.CharacterEllipsis
+            };
+            panel.Children.Add(titleBlock);
+
+            tabBorder.Child = panel;
+
+            // Click to select tab
+            tabBorder.MouseLeftButtonDown += (s, e) =>
+            {
+                SelectTab(capturedTabId);
+            };
+
+            TabStrip.Children.Add(tabBorder);
         }
     }
 
-    private void BookmarkBar_Click(object sender, RoutedEventArgs e)
+    private void Navigate(string url)
     {
-        if (sender is Button button && button.Tag is Bookmark bookmark)
+        if (string.IsNullOrEmpty(url) || !_tabs.ContainsKey(_activeTabId)) return;
+
+        // Normalize URL
+        if (!url.StartsWith("http", StringComparison.OrdinalIgnoreCase) &&
+            !url.StartsWith("about:", StringComparison.OrdinalIgnoreCase))
         {
-            var mainVm = DataContext as MainViewModel;
-            mainVm?.CreateNewTabWithUrl(bookmark.Url);
+            if (url.Contains('.') && !url.Contains(' '))
+                url = "https://" + url;
+            else
+                url = string.Format(App.Settings.SearchEngine, Uri.EscapeDataString(url));
         }
+
+        _tabUrls[_activeTabId] = url;
+        AddressBar.Text = url;
+        StatusText.Text = $"导航到: {url}";
+
+        _tabs[_activeTabId].CoreWebView2?.Navigate(url);
     }
 
-    private void BookmarkBar_MouseEnter(object sender, MouseEventArgs e)
+    private void UpdateBookmarksBar()
     {
-        if (sender is Button button)
+        BookmarksBar.Children.Clear();
+        var bookmarks = App.GetBookmarksByParent(null).Where(b => !b.IsFolder).Take(15).ToList();
+
+        foreach (var b in bookmarks)
         {
-            button.BorderBrush = new SolidColorBrush(Color.FromRgb(0xE0, 0xE0, 0xE0));
-            button.Background = new SolidColorBrush(Color.FromRgb(0xF5, 0xF5, 0xF5));
+            var btn = new Button
+            {
+                Content = b.Title,
+                Padding = new Thickness(8, 2, 8, 2),
+                Margin = new Thickness(2, 0, 2, 0),
+                Cursor = Cursors.Hand,
+                FontSize = 11,
+                Background = Brushes.Transparent,
+                BorderThickness = new Thickness(1),
+                BorderBrush = Brushes.LightGray
+            };
+
+            string bookmarkUrl = b.Url;
+            btn.Click += (_, _) => Navigate(bookmarkUrl);
+
+            BookmarksBar.Children.Add(btn);
         }
     }
 
-    private void BookmarkBar_MouseLeave(object sender, MouseEventArgs e)
+    #region Event Handlers
+
+    private void Window_KeyDown(object sender, KeyEventArgs e)
     {
-        if (sender is Button button)
+        if (e.Key == Key.T && Keyboard.Modifiers == ModifierKeys.Control)
         {
-            button.BorderBrush = Brushes.Transparent;
-            button.Background = Brushes.Transparent;
+            _ = CreateNewTab();
+            e.Handled = true;
         }
-    }
-
-    private static string GetIconForUrl(string url)
-    {
-        if (string.IsNullOrEmpty(url)) return "📄";
-
-        var lowerUrl = url.ToLower();
-        if (lowerUrl.Contains("youtube.com") || lowerUrl.Contains("youtu.be")) return "▶️";
-        if (lowerUrl.Contains("github.com")) return "🐙";
-        if (lowerUrl.Contains("twitter.com") || lowerUrl.Contains("x.com")) return "🐦";
-        if (lowerUrl.Contains("facebook.com")) return "👤";
-        if (lowerUrl.Contains("instagram.com")) return "📷";
-        if (lowerUrl.Contains("reddit.com")) return "🤖";
-        if (lowerUrl.Contains("wikipedia.org")) return "📚";
-        if (lowerUrl.Contains("google.com")) return "🔍";
-        if (lowerUrl.Contains("bing.com")) return "🔎";
-
-        return "📄";
+        else if (e.Key == Key.W && Keyboard.Modifiers == ModifierKeys.Control)
+        {
+            if (_activeTabId > 0) CloseTab(_activeTabId);
+            e.Handled = true;
+        }
+        else if (e.Key == Key.F5)
+        {
+            if (_tabs.TryGetValue(_activeTabId, out var w)) w.Reload();
+            e.Handled = true;
+        }
+        else if (e.Key == Key.F12)
+        {
+            if (_tabs.TryGetValue(_activeTabId, out var w)) w.CoreWebView2?.OpenDevToolsWindow();
+            e.Handled = true;
+        }
+        else if (e.Key == Key.L && Keyboard.Modifiers == ModifierKeys.Control)
+        {
+            AddressBar.Focus();
+            AddressBar.SelectAll();
+            e.Handled = true;
+        }
+        else if (e.Key == Key.OemPlus && Keyboard.Modifiers == ModifierKeys.Control)
+        {
+            ZoomInBtn_Click(sender, e);
+            e.Handled = true;
+        }
+        else if (e.Key == Key.OemMinus && Keyboard.Modifiers == ModifierKeys.Control)
+        {
+            ZoomOutBtn_Click(sender, e);
+            e.Handled = true;
+        }
     }
 
     private void AddressBar_KeyDown(object sender, KeyEventArgs e)
     {
         if (e.Key == Key.Enter)
         {
-            if (_isSuggestionActive && SuggestionsList.SelectedItem is SuggestionViewModel suggestion)
-            {
-                ApplySuggestion(suggestion);
-            }
-            else if (DataContext is MainViewModel vm)
-            {
-                SuggestionsPopup.IsOpen = false;
-                _isSuggestionActive = false;
-                vm.NavigateToUrlCommand.Execute(null);
-                _activeBrowserView?.Focus();
-            }
+            Navigate(AddressBar.Text.Trim());
+            e.Handled = true;
         }
     }
 
-    private void AddressBar_GotFocus(object sender, RoutedEventArgs e)
+    private void NewTabBtn_Click(object sender, RoutedEventArgs e) => _ = CreateNewTab();
+
+    private void BackBtn_Click(object sender, RoutedEventArgs e)
     {
-        AddressBar.SelectAll();
-        // Re-trigger suggestions if there's text
-        if (!string.IsNullOrEmpty(AddressBar.Text) && AddressBar.Text.Length >= 2)
+        if (_tabs.TryGetValue(_activeTabId, out var w) && w.CoreWebView2?.CanGoBack == true)
+            w.CoreWebView2.GoBack();
+    }
+
+    private void ForwardBtn_Click(object sender, RoutedEventArgs e)
+    {
+        if (_tabs.TryGetValue(_activeTabId, out var w) && w.CoreWebView2?.CanGoForward == true)
+            w.CoreWebView2.GoForward();
+    }
+
+    private void ReloadBtn_Click(object sender, RoutedEventArgs e)
+    {
+        if (_tabs.TryGetValue(_activeTabId, out var w)) w.Reload();
+    }
+
+    private void HomeBtn_Click(object sender, RoutedEventArgs e)
+    {
+        Navigate(App.Settings.Homepage);
+    }
+
+    private void BookmarkBtn_Click(object sender, RoutedEventArgs e)
+    {
+        if (_activeTabId < 0 || !_tabUrls.ContainsKey(_activeTabId)) return;
+
+        var url = _tabUrls[_activeTabId];
+        if (string.IsNullOrEmpty(url)) return;
+
+        var title = _tabTitles.GetValueOrDefault(_activeTabId, url);
+        App.AddBookmark(title, url);
+        UpdateBookmarksBar();
+        StatusText.Text = $"已收藏: {title}";
+    }
+
+    private void HistoryBtn_Click(object sender, RoutedEventArgs e)
+    {
+        var win = new HistoryWindow();
+        win.Owner = this;
+        win.ShowDialog();
+    }
+
+    private void SettingsBtn_Click(object sender, RoutedEventArgs e)
+    {
+        var win = new SettingsWindow();
+        win.Owner = this;
+        if (win.ShowDialog() == true)
         {
-            _ = LoadSuggestionsAsync();
+            UpdateBookmarksBar();
         }
     }
 
-    private void AddressBar_LostFocus(object sender, RoutedEventArgs e)
+    private void ZoomInBtn_Click(object sender, RoutedEventArgs e)
     {
-        // Delay closing popup to allow click on suggestion
-        Dispatcher.BeginInvoke(new Action(() =>
+        if (_tabs.TryGetValue(_activeTabId, out var w) && w.ZoomFactor < 5.0)
         {
-            if (!SuggestionsList.IsMouseOver)
-            {
-                SuggestionsPopup.IsOpen = false;
-                _isSuggestionActive = false;
-                if (DataContext is MainViewModel vm)
-                {
-                    vm.AddressBarText = vm.CurrentUrl;
-                }
-            }
-        }), DispatcherPriority.Background);
-    }
-
-    private void Tab_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
-    {
-        if (sender is Border border &&
-            border.DataContext is TabInfo tab &&
-            DataContext is MainViewModel vm)
-        {
-            vm.SelectTabCommand.Execute(tab);
+            w.ZoomFactor = Math.Min(5.0, w.ZoomFactor + 0.2);
+            ZoomText.Text = $"{(int)(w.ZoomFactor * 100)}%";
         }
     }
 
-    private void Tab_MouseDown(object sender, MouseButtonEventArgs e)
+    private void ZoomOutBtn_Click(object sender, RoutedEventArgs e)
     {
-        if (e.MiddleButton == MouseButtonState.Pressed &&
-            sender is Border border &&
-            border.DataContext is TabInfo tab &&
-            DataContext is MainViewModel vm)
+        if (_tabs.TryGetValue(_activeTabId, out var w) && w.ZoomFactor > 0.25)
         {
-            vm.CloseTabCommand.Execute(tab);
+            w.ZoomFactor = Math.Max(0.25, w.ZoomFactor - 0.2);
+            ZoomText.Text = $"{(int)(w.ZoomFactor * 100)}%";
         }
     }
 
-    private void TabClose_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
-    {
-        e.Handled = true;
-    }
-
-    private void Logo_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
-    {
-        if (DataContext is MainViewModel vm)
-        {
-            vm.OpenHomepageCommand.Execute(null);
-        }
-    }
-
-    private void NewTab_Click(object sender, MouseButtonEventArgs e)
-    {
-        if (DataContext is MainViewModel vm)
-        {
-            vm.NewTabCommand.Execute(null);
-        }
-    }
-
-    public void FocusAddressBar()
-    {
-        AddressBar.Focus();
-        AddressBar.SelectAll();
-    }
-
-    public async void RefreshBookmarksBar()
-    {
-        await LoadBookmarksBarAsync();
-    }
-
-    // --- Search Suggestions ---
-
-    private void AddressBar_TextChanged(object sender, TextChangedEventArgs e)
-    {
-        _suggestionTimer.Stop();
-        _suggestionTimer.Start();
-    }
-
-    private void SuggestionTimer_Tick(object? sender, EventArgs e)
-    {
-        _suggestionTimer.Stop();
-        _ = LoadSuggestionsAsync();
-    }
-
-    private async Task LoadSuggestionsAsync()
-    {
-        var query = AddressBar.Text?.Trim();
-        if (string.IsNullOrEmpty(query) || query.Length < 2)
-        {
-            SuggestionsPopup.IsOpen = false;
-            return;
-        }
-
-        var suggestions = new List<SuggestionViewModel>();
-
-        // Search history
-        var historyResults = await _historyService.SearchAsync(query, 5);
-        foreach (var h in historyResults)
-        {
-            suggestions.Add(new SuggestionViewModel("🕐", h.Title, h.Url, 0));
-        }
-
-        // Search bookmarks
-        var bookmarkResults = await _bookmarkService.SearchAsync(query, 5);
-        foreach (var b in bookmarkResults)
-        {
-            // Skip duplicates from history
-            if (!suggestions.Any(s => s.Url == b.Url))
-            {
-                suggestions.Add(new SuggestionViewModel("⭐", b.Title, b.Url, 1));
-            }
-        }
-
-        // Add search suggestion
-        suggestions.Add(new SuggestionViewModel("🔍", $"搜索 \"{query}\"", query, 2, false));
-
-        SuggestionsList.ItemsSource = suggestions;
-        SuggestionsPopup.IsOpen = suggestions.Count > 0;
-        _isSuggestionActive = true;
-    }
-
-    private void AddressBar_KeyUp(object sender, KeyEventArgs e)
-    {
-        if (!SuggestionsPopup.IsOpen) return;
-
-        if (e.Key == Key.Down)
-        {
-            var idx = SuggestionsList.SelectedIndex;
-            if (idx < SuggestionsList.Items.Count - 1)
-                SuggestionsList.SelectedIndex = idx + 1;
-        }
-        else if (e.Key == Key.Up)
-        {
-            var idx = SuggestionsList.SelectedIndex;
-            if (idx > 0)
-                SuggestionsList.SelectedIndex = idx - 1;
-        }
-        else if (e.Key == Key.Escape)
-        {
-            SuggestionsPopup.IsOpen = false;
-            _isSuggestionActive = false;
-            AddressBar.Focus();
-        }
-    }
-
-    private void SuggestionsList_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (SuggestionsList.SelectedItem is SuggestionViewModel suggestion)
-        {
-            AddressBar.Text = suggestion.Url;
-        }
-    }
-
-    private void SuggestionsList_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
-    {
-        if (SuggestionsList.SelectedItem is SuggestionViewModel suggestion)
-        {
-            ApplySuggestion(suggestion);
-        }
-    }
-
-    private void ApplySuggestion(SuggestionViewModel suggestion)
-    {
-        SuggestionsPopup.IsOpen = false;
-        _isSuggestionActive = false;
-
-        if (DataContext is MainViewModel vm)
-        {
-            // Always navigate in current tab
-            vm.AddressBarText = suggestion.Url;
-            vm.NavigateToUrlCommand.Execute(null);
-        }
-
-        _activeBrowserView?.Focus();
-    }
-
-    private async void SettingsWindow_SettingsChanged(object? sender, EventArgs e)
-    {
-        // Apply bookmarks bar visibility
-        if (DataContext is MainViewModel vm)
-        {
-            var showBookmarksBar = await App.GetService<ISettingsService>().GetAsync("show_bookmarks_bar", "true");
-            BookmarksBarBorder.Visibility = showBookmarksBar?.ToLower() == "true"
-                ? Visibility.Visible
-                : Visibility.Collapsed;
-        }
-    }
+    #endregion
 }
