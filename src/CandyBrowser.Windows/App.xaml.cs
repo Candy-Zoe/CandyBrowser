@@ -177,6 +177,27 @@ public partial class App : Application
         }
     }
 
+    public static void MoveBookmark(long id, long? newParentId)
+    {
+        var item = _bookmarks.FirstOrDefault(b => b.Id == id);
+        if (item != null)
+        {
+            item.ParentId = newParentId;
+            SaveBookmarks();
+        }
+    }
+
+    public static void UpdateBookmark(long id, string title, string? url = null)
+    {
+        var item = _bookmarks.FirstOrDefault(b => b.Id == id);
+        if (item != null)
+        {
+            item.Title = title;
+            if (url != null) item.Url = url;
+            SaveBookmarks();
+        }
+    }
+
     public static List<BookmarkItem> GetBookmarksByParent(long? parentId)
     {
         return _bookmarks.Where(b => b.ParentId == parentId).OrderBy(b => b.Title).ToList();
@@ -230,6 +251,12 @@ public partial class App : Application
     public static void ClearHistory()
     {
         _history.Clear();
+        SaveHistory();
+    }
+
+    public static void RemoveHistory(string url)
+    {
+        _history.RemoveAll(h => h.Url == url);
         SaveHistory();
     }
     #endregion

@@ -18,6 +18,17 @@ public partial class MainWindow : Window
     private int _nextTabId = 1;
     private int _activeTabId = -1;
 
+    // 标签分组颜色
+    private static readonly SolidColorBrush[] GroupColors =
+    {
+        new(Color.FromRgb(0x4C,0x9C,0xE0)), // 蓝
+        new(Color.FromRgb(0x56,0xB8,0x70)), // 绿
+        new(Color.FromRgb(0xE8,0x6C,0x60)), // 红
+        new(Color.FromRgb(0xF5,0xA6,0x23)), // 橙
+        new(Color.FromRgb(0x9B,0x59,0xB6)), // 紫
+        new(Color.FromRgb(0x1A,0xBC,0x9C)), // 青
+    };
+
     // 鼠标手势
     private Point _gestureStart;
     private bool _isGesture;
@@ -211,9 +222,25 @@ public partial class MainWindow : Window
         {
             if (!_tabs.TryGetValue(tabId, out var tab)) continue;
             var title = tab.Title;
-            if (title.Length > 24) title = title[..24] + "…";
+            if (title.Length > 24) title = title[..24] + "\u2026";
             var isActive = tabId == _activeTabId;
-
+            int capturedTabId = tabId;
+    
+            // 外层容器: 分组色条 + 标签体
+            var outerPanel = new StackPanel { Orientation = Orientation.Horizontal };
+    
+            // 分组色条
+            if (tab.GroupId >= 0 && tab.GroupId < GroupColors.Length)
+            {
+                var groupBar = new Border
+                {
+                    Width = 3, Background = GroupColors[tab.GroupId],
+                    CornerRadius = new CornerRadius(2, 0, 0, 0),
+                    Margin = new Thickness(0, 2, 0, 0)
+                };
+                outerPanel.Children.Add(groupBar);
+            }
+    
             var tabBorder = new Border
             {
                 Background = isActive ? ActiveTabBrush : InactiveTabBrush,
@@ -224,49 +251,108 @@ public partial class MainWindow : Window
                 MinWidth = 60,
                 MaxWidth = 220
             };
-
+    
             var panel = new DockPanel();
+    
+            // 关闭按钮 - 使用正确的模板，确保可见可点击
             var closeBtn = new Button
             {
-                Content = "✕", FontSize = 9, Width = 18, Height = 18,
-                Margin = new Thickness(4, 0, 0, 0), Cursor = Cursors.Hand,
+                Content = "\u2715",
+                FontSize = 9,
+                Width = 18,
+                Height = 18,
+                Margin = new Thickness(4, 0, 0, 0),
+                Cursor = Cursors.Hand,
                 VerticalAlignment = VerticalAlignment.Center,
-                Foreground = new SolidColorBrush(Color.FromRgb(0x66, 0x66, 0x66))
+                Foreground = new SolidColorBrush(Color.FromRgb(0x66, 0x66, 0x66)),
+                Background = Brushes.Transparent,
+                BorderThickness = new Thickness(0),
+                Padding = new Thickness(0)
             };
-            closeBtn.Template = new ControlTemplate(typeof(Button));
-            closeBtn.Background = Brushes.Transparent;
-            closeBtn.BorderThickness = new Thickness(0);
-
-            int capturedTabId = tabId;
+            // 使用 XAML 解析的正确模板，包含 ContentPresenter + 悬停效果
+            closeBtn.Template = CreateCloseButtonTemplate();
+    
             closeBtn.Click += (s, e) => { e.Handled = true; CloseTab(capturedTabId); };
             DockPanel.SetDock(closeBtn, Dock.Right);
             panel.Children.Add(closeBtn);
-
+    
             panel.Children.Add(new TextBlock
             {
                 Text = title, FontSize = 12, Foreground = TabTextBrush,
                 VerticalAlignment = VerticalAlignment.Center,
                 TextTrimming = TextTrimming.CharacterEllipsis
             });
-
+    
             tabBorder.Child = panel;
             tabBorder.MouseEnter += (s, e) => { if (tabId != _activeTabId) tabBorder.Background = HoverTabBrush; };
             tabBorder.MouseLeave += (s, e) => { tabBorder.Background = tabId == _activeTabId ? ActiveTabBrush : InactiveTabBrush; };
             tabBorder.MouseLeftButtonDown += (s, e) =>
             {
-                SelectTab(capturedTabId);
-                if (_tabs.TryGetValue(capturedTabId, out var t))
-                    MainWebView.CoreWebView2?.Navigate(t.Url);
+                if (e.ChangedButton == MouseButton.Left && e.ClickCount == 1)
+                {
+                    SelectTab(capturedTabId);
+                    if (_tabs.TryGetValue(capturedTabId, out var t))
+                        MainWebView.CoreWebView2?.Navigate(t.Url);
+                }
             };
-
+    
             // 中键关闭标签
             tabBorder.PreviewMouseDown += (s, e) =>
             {
                 if (e.ChangedButton == MouseButton.Middle) { e.Handled = true; CloseTab(capturedTabId); }
             };
-
-            TabStrip.Children.Add(tabBorder);
+    
+            // 右键菜单 - 标签分组
+            var ctxMenu = new ContextMenu();
+            var groupHeader = new MenuItem { Header = "\u5206\u7EC4\u989C\u8272", IsEnabled = false };
+            ctxMenu.Items.Add(groupHeader);
+            var noGroup = new MenuItem { Header = "\u65E0\u5206\u7EC4" };
+            noGroup.Click += (s, e) => { if (_tabs.ContainsKey(capturedTabId)) { _tabs[capturedTabId].GroupId = -1; RefreshTabStrip(); } };
+            ctxMenu.Items.Add(noGroup);
+            ctxMenu.Items.Add(new Separator());
+            string[] groupNames = { "\u84DD\u8272", "\u7EFF\u8272", "\u7EA2\u8272", "\u6A59\u8272", "\u7D2B\u8272", "\u9752\u8272" };
+            for (int g = 0; g < GroupColors.Length; g++)
+            {
+                int groupId = g;
+                var mi = new MenuItem { Header = groupNames[g] };
+                mi.Click += (s, e) => { if (_tabs.ContainsKey(capturedTabId)) { _tabs[capturedTabId].GroupId = groupId; RefreshTabStrip(); } };
+                ctxMenu.Items.Add(mi);
+            }
+            ctxMenu.Items.Add(new Separator());
+            var closeMi = new MenuItem { Header = "\u5173\u95ED\u6807\u7B7E" };
+            closeMi.Click += (s, e) => CloseTab(capturedTabId);
+            ctxMenu.Items.Add(closeMi);
+            var closeOthersMi = new MenuItem { Header = "\u5173\u95ED\u5176\u4ED6\u6807\u7B7E" };
+            closeOthersMi.Click += (s, e) =>
+            {
+                var toClose = _tabOrder.Where(id => id != capturedTabId).ToList();
+                foreach (var id in toClose) CloseTab(id);
+            };
+            ctxMenu.Items.Add(closeOthersMi);
+            tabBorder.ContextMenu = ctxMenu;
+    
+            outerPanel.Children.Add(tabBorder);
+            TabStrip.Children.Add(outerPanel);
         }
+    }
+    
+    private static ControlTemplate CreateCloseButtonTemplate()
+    {
+        var xaml = @"<ControlTemplate xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'
+                                       xmlns:x='http://schemas.microsoft.com/winfx/2006/xaml'
+                                       TargetType='Button'>
+            <Border x:Name='Bd' Background='{TemplateBinding Background}' CornerRadius='9' Padding='0'>
+                <ContentPresenter HorizontalAlignment='Center' VerticalAlignment='Center'/>
+            </Border>
+            <ControlTemplate.Triggers>
+                <Trigger Property='IsMouseOver' Value='True'>
+                    <Setter TargetName='Bd' Property='Background' Value='#DD4444'/>
+                </Trigger>
+            </ControlTemplate.Triggers>
+        </ControlTemplate>";
+        using var reader = new System.IO.StringReader(xaml);
+        using var xmlReader = System.Xml.XmlReader.Create(reader);
+        return (ControlTemplate)System.Windows.Markup.XamlReader.Load(xmlReader);
     }
 
     #endregion
@@ -651,6 +737,7 @@ public class TabState
 {
     public string Url { get; set; } = "";
     public string Title { get; set; } = "新标签页";
+    public int GroupId { get; set; } = -1;
 }
 
 public class ClosedTab
