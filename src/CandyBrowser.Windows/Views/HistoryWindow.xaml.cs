@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Controls;
 
 namespace CandyBrowser.Windows.Views;
 
@@ -10,18 +11,28 @@ public partial class HistoryWindow : Window
         LoadHistory();
     }
 
-    private void LoadHistory()
+    private void LoadHistory(string? filter = null)
     {
         HistoryList.Items.Clear();
-        foreach (var h in App.History.Take(100))
+        var items = App.History.Take(200).AsEnumerable();
+        if (!string.IsNullOrEmpty(filter) && filter != "搜索历史记录...")
         {
-            HistoryList.Items.Add($"{h.VisitedAt:MM-dd HH:mm} | {h.Title} | {h.Url}");
+            items = items.Where(h =>
+                h.Title.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
+                h.Url.Contains(filter, StringComparison.OrdinalIgnoreCase));
         }
+        foreach (var h in items)
+            HistoryList.Items.Add(h);
+    }
+
+    private void SearchBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        LoadHistory(SearchBox.Text);
     }
 
     private void ClearBtn_Click(object sender, RoutedEventArgs e)
     {
-        if (MessageBox.Show("确定清除?", "确认", MessageBoxButton.YesNo) == MessageBoxResult.Yes)
+        if (MessageBox.Show("确定清除所有历史记录?", "确认", MessageBoxButton.YesNo, MessageBoxImage.Warning) == MessageBoxResult.Yes)
         {
             App.ClearHistory();
             LoadHistory();

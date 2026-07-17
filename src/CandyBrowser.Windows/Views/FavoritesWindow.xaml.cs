@@ -18,29 +18,31 @@ public partial class FavoritesWindow : Window
 
         foreach (var item in items)
         {
-            var treeItem = new TreeViewItem
-            {
-                Header = item.IsFolder ? $"📁 {item.Title}" : $"📄 {item.Title}",
-                Tag = item,
-                IsExpanded = true
-            };
-
-            if (item.IsFolder)
-            {
-                var children = App.GetBookmarksByParent(item.Id);
-                foreach (var child in children)
-                {
-                    var childItem = new TreeViewItem
-                    {
-                        Header = child.IsFolder ? $"📁 {child.Title}" : $"📄 {child.Title}",
-                        Tag = child
-                    };
-                    treeItem.Items.Add(childItem);
-                }
-            }
-
+            var treeItem = CreateTreeItem(item);
             FavoritesTree.Items.Add(treeItem);
         }
+    }
+
+    // b8: 递归加载收藏夹，支持任意深度嵌套
+    private TreeViewItem CreateTreeItem(BookmarkItem item)
+    {
+        var treeItem = new TreeViewItem
+        {
+            Header = item.IsFolder ? $"📁 {item.Title}" : $"📄 {item.Title}",
+            Tag = item,
+            IsExpanded = true
+        };
+
+        if (item.IsFolder)
+        {
+            var children = App.GetBookmarksByParent(item.Id);
+            foreach (var child in children)
+            {
+                treeItem.Items.Add(CreateTreeItem(child));
+            }
+        }
+
+        return treeItem;
     }
 
     private void SearchBox_TextChanged(object sender, TextChangedEventArgs e)
@@ -67,7 +69,15 @@ public partial class FavoritesWindow : Window
         var dialog = new InputDialog("添加收藏", "名称:", "网址:");
         if (dialog.ShowDialog() == true)
         {
-            App.AddBookmark(dialog.Values[0], dialog.Values[1]);
+            // b7: 验证输入不为空
+            var name = dialog.Values[0].Trim();
+            var url = dialog.Values[1].Trim();
+            if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(url))
+            {
+                MessageBox.Show("名称和网址不能为空。", "提示");
+                return;
+            }
+            App.AddBookmark(name, url);
             LoadFavorites();
         }
     }
@@ -77,7 +87,14 @@ public partial class FavoritesWindow : Window
         var dialog = new InputDialog("新建文件夹", "文件夹名称:");
         if (dialog.ShowDialog() == true)
         {
-            App.AddFolder(dialog.Values[0]);
+            // b7: 验证输入不为空
+            var name = dialog.Values[0].Trim();
+            if (string.IsNullOrEmpty(name))
+            {
+                MessageBox.Show("文件夹名称不能为空。", "提示");
+                return;
+            }
+            App.AddFolder(name);
             LoadFavorites();
         }
     }

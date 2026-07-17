@@ -237,9 +237,14 @@ public partial class App : Application
 
 public class AppSettings
 {
-    public string Homepage { get; set; } = "https://www.bing.com";
-    public string SearchEngine { get; set; } = "https://www.bing.com/search?q={0}";
+    public string Homepage { get; set; } = "https://www.baidu.com";
+    public string SearchEngine { get; set; } = "https://www.baidu.com/s?wd={0}";
     public bool ShowBookmarksBar { get; set; } = true;
+    public bool RestoreOnStartup { get; set; } = false;
+    public string Theme { get; set; } = "light";
+    public bool DoNotTrack { get; set; } = false;
+    public bool BlockPopups { get; set; } = true;
+    public bool ClearOnExit { get; set; } = false;
 }
 
 public class BookmarkItem
