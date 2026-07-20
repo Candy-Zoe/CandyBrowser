@@ -6,6 +6,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using CandyBrowser.Shared.Abstractions;
 using CandyBrowser.Services.Bookmarks;
+using CandyBrowser.Services.Bookmarks.ImportExport;
 using CandyBrowser.Services.Downloads;
 using CandyBrowser.Services.Extensions;
 using CandyBrowser.Services.History;
@@ -15,6 +16,7 @@ using CandyBrowser.Services.Passwords;
 using CandyBrowser.Services.Reading;
 using CandyBrowser.Services.Settings;
 using CandyBrowser.Services.Tabs;
+using CandyBrowser.Windows.Services;
 using CandyBrowser.Data.Contexts;
 using Microsoft.EntityFrameworkCore;
 
@@ -83,6 +85,12 @@ public partial class App : System.Windows.Application
                 services.AddSingleton<IExtensionService, ExtensionService>();
                 services.AddSingleton<IReadingModeService, ReadingModeService>();
                 services.AddSingleton<IPdfService, PdfService>();
+                services.AddSingleton<IBookmarkImportExportService, BookmarkImportExportService>();
+                services.AddSingleton<IIncognitoWindowService>(sp =>
+                {
+                    var exePath = Process.GetCurrentProcess().MainModule?.FileName ?? "";
+                    return new IncognitoWindowService(exePath);
+                });
 
                 // JSON settings provider (backward compat)
                 services.AddSingleton<JsonSettingsProvider>();
@@ -98,7 +106,7 @@ public partial class App : System.Windows.Application
         var db = _appScope.ServiceProvider.GetRequiredService<BrowserDbContext>();
         db.Database.EnsureCreated();
 
-        // Create and show main window via DI
+        // Create and show main window
         var sp = _appScope.ServiceProvider;
         var mainWindow = new MainWindow(
             sp.GetRequiredService<IBookmarkService>(),
@@ -108,6 +116,10 @@ public partial class App : System.Windows.Application
             sp.GetRequiredService<ISettingsService>(),
             sp.GetRequiredService<IPdfService>(),
             sp.GetRequiredService<IReadingModeService>(),
+            sp.GetRequiredService<IBookmarkImportExportService>(),
+            new ScreenshotService(),
+            new ScreenRecordingService(),
+            sp.GetRequiredService<IIncognitoWindowService>(),
             sp.GetRequiredService<JsonSettingsProvider>());
         mainWindow.Show();
     }

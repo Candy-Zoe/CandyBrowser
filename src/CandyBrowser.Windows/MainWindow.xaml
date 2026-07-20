@@ -96,6 +96,13 @@
                                 Click="BookmarkBtn_Click" Style="{StaticResource NavBtn}" ToolTip="收藏当前页" Margin="1,0,0,0"/>
                         <Button DockPanel.Dock="Right" Content="&#xE71D;" FontFamily="Segoe MDL2 Assets"
                                 Click="FavoritesBtn_Click" Style="{StaticResource NavBtn}" ToolTip="收藏夹" Margin="1,0,0,0"/>
+                        <Button x:Name="ScreenshotBtn" DockPanel.Dock="Right" Content="&#xE7AD;"
+                                FontFamily="Segoe MDL2 Assets"
+                                Click="ScreenshotBtn_Click" Style="{StaticResource NavBtn}" ToolTip="截图 (Ctrl+Shift+S)" Margin="1,0,0,0"/>
+                        <!-- 更多按钮 -->
+                        <Button x:Name="MoreBtn" DockPanel.Dock="Right" Content="&#xE712;"
+                                FontFamily="Segoe MDL2 Assets"
+                                Click="MoreBtn_Click" Style="{StaticResource NavBtn}" ToolTip="更多" Margin="1,0,0,0"/>
 
                         <!-- 地址栏 (含安全指示) -->
                         <Border Background="White" CornerRadius="16" Padding="4,0,10,0"

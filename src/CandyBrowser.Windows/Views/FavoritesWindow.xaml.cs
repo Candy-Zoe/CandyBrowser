@@ -1,3 +1,4 @@
+using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -12,14 +13,16 @@ public partial class FavoritesWindow : Window
 {
     private readonly IBookmarkService _bookmarkService;
     private readonly WebView2 _webView;
+    private readonly IBookmarkImportExportService _bookmarkImportExport;
     private TreeViewItem? _dragItem;
     private readonly Dictionary<TreeViewItem, CheckBox> _checkBoxes = new();
 
-    public FavoritesWindow(IBookmarkService bookmarkService, WebView2 webView)
+    public FavoritesWindow(IBookmarkService bookmarkService, WebView2 webView, IBookmarkImportExportService bookmarkImportExport)
     {
         InitializeComponent();
         _bookmarkService = bookmarkService;
         _webView = webView;
+        _bookmarkImportExport = bookmarkImportExport;
         Loaded += async (s, e) => await LoadFavorites();
     }
 
@@ -405,6 +408,50 @@ public partial class FavoritesWindow : Window
             var folder = new Models.Bookmark { Title = name, Url = "", ParentId = null, IsFolder = true, Position = 0 };
             await _bookmarkService.AddAsync(folder);
             await LoadFavorites();
+        }
+    }
+
+    private async void ExportBookmarksBtn_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var html = await _bookmarkImportExport.ExportToHtmlAsync();
+            var dlg = new Microsoft.Win32.SaveFileDialog
+            {
+                Filter = "书签文件 (*.html)|*.html",
+                FileName = $"bookmarks_{DateTime.Now:yyyyMMdd_HHmmss}.html"
+            };
+            if (dlg.ShowDialog() == true)
+            {
+                await File.WriteAllTextAsync(dlg.FileName, html, System.Text.Encoding.UTF8);
+                MessageBox.Show("书签导出成功", "完成", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"导出失败: {ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private async void ImportBookmarksBtn_Click(object sender, RoutedEventArgs e)
+    {
+        var dlg = new Microsoft.Win32.OpenFileDialog
+        {
+            Filter = "书签文件 (*.html)|*.html|所有文件|*.*"
+        };
+        if (dlg.ShowDialog() == true)
+        {
+            try
+            {
+                var html = await File.ReadAllTextAsync(dlg.FileName, System.Text.Encoding.UTF8);
+                var count = await _bookmarkImportExport.ImportFromHtmlAsync(html);
+                MessageBox.Show($"成功导入 {count} 个书签", "完成", MessageBoxButton.OK, MessageBoxImage.Information);
+                await LoadFavorites();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"导入失败: {ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
         }
     }
 

@@ -3,12 +3,14 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.IO;
+using System.Text;
 using System.Diagnostics;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.Wpf;
 using CandyBrowser.Shared.Abstractions;
 using CandyBrowser.Core.Models;
 using CandyBrowser.Windows.Views;
+using CandyBrowser.Windows.Services;
 
 namespace CandyBrowser.Windows;
 
@@ -21,6 +23,10 @@ public partial class MainWindow : Window
     private readonly ISettingsService _settingsService;
     private readonly IPdfService _pdfService;
     private readonly IReadingModeService _readingModeService;
+    private readonly IBookmarkImportExportService _bookmarkImportExport;
+    private readonly ScreenshotService _screenshotService;
+    private readonly ScreenRecordingService _screenRecordingService;
+    private readonly IIncognitoWindowService _incognitoWindowService;
     private readonly JsonSettingsProvider _jsonSettings;
 
     private readonly Dictionary<int, TabState> _tabs = new();
@@ -51,6 +57,16 @@ public partial class MainWindow : Window
     private Point _gestureStart;
     private bool _isGesture;
 
+    /// <summary>
+    /// Gets the WebView2 control for external services (screenshot, recording).
+    /// </summary>
+    public WebView2 MainWebViewControl => MainWebView;
+
+    /// <summary>
+    /// Gets the CoreWebView2 for external services.
+    /// </summary>
+    public CoreWebView2 CoreWebView2 => MainWebView.CoreWebView2!;
+
     public MainWindow(
         IBookmarkService bookmarkService,
         IHistoryService historyService,
@@ -59,6 +75,10 @@ public partial class MainWindow : Window
         ISettingsService settingsService,
         IPdfService pdfService,
         IReadingModeService readingModeService,
+        IBookmarkImportExportService bookmarkImportExport,
+        ScreenshotService screenshotService,
+        ScreenRecordingService screenRecordingService,
+        IIncognitoWindowService incognitoWindowService,
         JsonSettingsProvider jsonSettings)
     {
         InitializeComponent();
@@ -69,6 +89,10 @@ public partial class MainWindow : Window
         _settingsService = settingsService;
         _pdfService = pdfService;
         _readingModeService = readingModeService;
+        _bookmarkImportExport = bookmarkImportExport;
+        _screenshotService = screenshotService;
+        _screenRecordingService = screenRecordingService;
+        _incognitoWindowService = incognitoWindowService;
         _jsonSettings = jsonSettings;
         
         Loaded += MainWindow_Loaded;
@@ -97,7 +121,9 @@ public partial class MainWindow : Window
 
             await MainWebView.EnsureCoreWebView2Async(env);
 
-            // 注册 WebView2 事件
+            // Set screenshot/recording services with the WebView2 reference
+            _screenshotService.SetWebView(MainWebView);
+            _screenRecordingService.SetCoreWebView2(MainWebView.CoreWebView2);
             MainWebView.CoreWebView2.NavigationStarting += (s, ev) =>
             {
                 Dispatcher.Invoke(() =>
@@ -404,6 +430,21 @@ public partial class MainWindow : Window
                 foreach (var id in toClose) CloseTab(id);
             };
             ctxMenu.Items.Add(closeOthersMi);
+    ctxMenu.Items.Add(new Separator());
+    var closeRightMi = new MenuItem { Header = "关闭右侧标签" };
+    closeRightMi.Click += (s, e) =>
+    {
+        var indices = _tabOrder.Where(id => _tabOrder.IndexOf(id) > _tabOrder.IndexOf(capturedTabId)).ToList();
+        foreach (var id in indices) CloseTab(id);
+    };
+    ctxMenu.Items.Add(closeRightMi);
+    var closeAllMi = new MenuItem { Header = "关闭所有标签" };
+    closeAllMi.Click += (s, e) =>
+    {
+        var ids = _tabOrder.ToList();
+        foreach (var id in ids) CloseTab(id);
+    };
+    ctxMenu.Items.Add(closeAllMi);
             tabBorder.ContextMenu = ctxMenu;
     
             outerPanel.Children.Add(tabBorder);
@@ -866,6 +907,16 @@ public partial class MainWindow : Window
         else if (e.Key == Key.OemPlus && ctrl) { ZoomInBtn_Click(sender, e); e.Handled = true; }
         else if (e.Key == Key.OemMinus && ctrl) { ZoomOutBtn_Click(sender, e); e.Handled = true; }
         else if (e.Key == Key.R && ctrl) { MainWebView.Reload(); e.Handled = true; }
+        // Ctrl+Shift+S: Screenshot
+        else if (e.Key == Key.S && ctrl && shift) { _ = TakeScreenshot(); e.Handled = true; }
+        // Ctrl+Shift+N: New incognito window
+        else if (e.Key == Key.N && ctrl && shift) { NewIncognitoWindow_Click(); e.Handled = true; }
+        // Ctrl+N: New window
+        else if (e.Key == Key.N && ctrl) { NewWindow_Click(); e.Handled = true; }
+        // Ctrl+Shift+E: Export bookmarks
+        else if (e.Key == Key.E && ctrl && shift) { ExportBookmarks_Click(); e.Handled = true; }
+        // Ctrl+Shift+I: Import bookmarks
+        else if (e.Key == Key.I && ctrl && shift) { ImportBookmarks_Click(); e.Handled = true; }
     }
 
     private void Window_KeyUp(object sender, KeyEventArgs e)
@@ -984,7 +1035,7 @@ public partial class MainWindow : Window
 
     private async void FavoritesBtn_Click(object sender, RoutedEventArgs e)
     {
-        var win = new FavoritesWindow(_bookmarkService, MainWebView);
+        var win = new FavoritesWindow(_bookmarkService, MainWebView, _bookmarkImportExport);
         win.Owner = this;
         win.ShowDialog();
         await Task.Delay(100); // allow window to close
@@ -1037,9 +1088,170 @@ public partial class MainWindow : Window
         }
     }
 
+    private async void MoreBtn_Click(object sender, RoutedEventArgs e)
+    {
+        var btn = (Button)sender;
+        var menu = new ContextMenu();
+
+        // New Window
+        var newWinMi = new MenuItem { Header = "新建窗口" };
+        newWinMi.Click += (s, ev) => NewWindow_Click();
+        menu.Items.Add(newWinMi);
+
+        // New Incognito Window
+        var incognitoMi = new MenuItem { Header = "新建无痕窗口" };
+        incognitoMi.Click += (s, ev) => NewIncognitoWindow_Click();
+        menu.Items.Add(incognitoMi);
+
+        menu.Items.Add(new Separator());
+
+        // Export Bookmarks
+        var exportMi = new MenuItem { Header = "导出书签..." };
+        exportMi.Click += (s, ev) => ExportBookmarks_Click();
+        menu.Items.Add(exportMi);
+
+        // Import Bookmarks
+        var importMi = new MenuItem { Header = "导入书签..." };
+        importMi.Click += (s, ev) => ImportBookmarks_Click();
+        menu.Items.Add(importMi);
+
+        menu.Items.Add(new Separator());
+
+        // Screenshot
+        var screenshotMi = new MenuItem { Header = "截图 (Ctrl+Shift+S)" };
+        screenshotMi.Click += (s, ev) => { _ = TakeScreenshot(); };
+        menu.Items.Add(screenshotMi);
+
+        // Recording
+        var recordingMi = new MenuItem { Header = "开始录制" };
+        recordingMi.Click += (s, ev) => StartRecording_Click();
+        menu.Items.Add(recordingMi);
+
+        menu.PlacementTarget = btn;
+        menu.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
+        menu.IsOpen = true;
+    }
+
     #endregion
 
-    #region Helper Methods
+    #region Screenshot & Recording
+
+    private async void ScreenshotBtn_Click(object sender, RoutedEventArgs e)
+    {
+        await TakeScreenshot();
+    }
+
+    private async Task TakeScreenshot()
+    {
+        try
+        {
+            var path = await _screenshotService.CaptureScreenshotAsync();
+            if (!string.IsNullOrEmpty(path))
+            {
+                StatusText.Text = $"截图已保存: {Path.GetFileName(path)}";
+                MessageBox.Show($"截图已保存到:\n{path}", "截图成功", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            else
+            {
+                StatusText.Text = "截图失败";
+            }
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"截图失败: {ex.Message}";
+        }
+    }
+
+    private async void StartRecording_Click()
+    {
+        if (_screenRecordingService.IsRecording)
+        {
+            _screenRecordingService.StopRecording();
+            StatusText.Text = "录制已停止";
+        }
+        else
+        {
+            StatusText.Text = "开始录制...";
+            var success = await _screenRecordingService.StartRecordingAsync(fps: 15, durationSeconds: 30);
+            if (success)
+            {
+                var path = _screenRecordingService.LastRecordingPath;
+                if (!string.IsNullOrEmpty(path))
+                    StatusText.Text = $"录制完成: {Path.GetFileName(path)}";
+                else
+                    StatusText.Text = "录制完成（帧已保存为PNG）";
+            }
+            else
+                StatusText.Text = "录制已取消";
+        }
+    }
+
+    #endregion
+
+    #region New Window & Incognito
+
+    private void NewWindow_Click()
+    {
+        _incognitoWindowService.LaunchNewWindow();
+    }
+
+    private void NewIncognitoWindow_Click()
+    {
+        _incognitoWindowService.LaunchIncognitoWindow();
+    }
+
+    #endregion
+
+    #region Bookmark Import/Export
+
+    private async void ExportBookmarks_Click()
+    {
+        try
+        {
+            var html = await _bookmarkImportExport.ExportToHtmlAsync();
+            var dlg = new Microsoft.Win32.SaveFileDialog
+            {
+                Filter = "书签文件 (*.html)|*.html",
+                FileName = $"bookmarks_{DateTime.Now:yyyyMMdd_HHmmss}.html"
+            };
+            if (dlg.ShowDialog() == true)
+            {
+                await File.WriteAllTextAsync(dlg.FileName, html, Encoding.UTF8);
+                StatusText.Text = $"书签已导出: {dlg.FileName}";
+                MessageBox.Show("书签导出成功", "完成", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"导出失败: {ex.Message}";
+        }
+    }
+
+    private async void ImportBookmarks_Click()
+    {
+        var dlg = new Microsoft.Win32.OpenFileDialog
+        {
+            Filter = "书签文件 (*.html)|*.html|所有文件|*.*"
+        };
+        if (dlg.ShowDialog() == true)
+        {
+            try
+            {
+                var html = await File.ReadAllTextAsync(dlg.FileName, Encoding.UTF8);
+                var count = await _bookmarkImportExport.ImportFromHtmlAsync(html);
+                StatusText.Text = $"已导入 {count} 个书签";
+                MessageBox.Show($"成功导入 {count} 个书签", "完成", MessageBoxButton.OK, MessageBoxImage.Information);
+                UpdateBookmarksBar();
+            }
+            catch (Exception ex)
+            {
+                StatusText.Text = $"导入失败: {ex.Message}";
+                MessageBox.Show($"导入失败: {ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+    }
+
+    #endregion
 
     private T? FindVisualChild<T>(DependencyObject parent) where T : DependencyObject
     {
@@ -1054,8 +1266,6 @@ public partial class MainWindow : Window
         }
         return null;
     }
-
-    #endregion
 }
 
 public class TabState

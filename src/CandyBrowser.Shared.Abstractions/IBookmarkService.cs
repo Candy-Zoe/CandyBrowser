@@ -16,4 +16,13 @@ namespace CandyBrowser.Shared.Abstractions
         Task DeleteRecursiveAsync(long id);
         Task<IReadOnlyList<Bookmark>> GetTreeAsync();
     }
+
+    /// <summary>
+    /// Interface for bookmark import/export service.
+    /// </summary>
+    public interface IBookmarkImportExportService
+    {
+        Task<string> ExportToHtmlAsync();
+        Task<int> ImportFromHtmlAsync(string htmlContent, long? parentId = null);
+    }
 }
