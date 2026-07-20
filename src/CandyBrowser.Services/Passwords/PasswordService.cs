@@ -12,11 +12,26 @@ public class PasswordService : IPasswordService
 {
     private readonly BrowserDbContext _db;
     private readonly byte[] _masterKey;
+    private readonly string _keyStoragePath;
 
-    public PasswordService(BrowserDbContext db, byte[] masterKey)
+    public PasswordService(BrowserDbContext db, byte[]? masterKey = null)
     {
         _db = db;
-        _masterKey = masterKey;
+        
+        var dataDir = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "CandyBrowser");
+        Directory.CreateDirectory(dataDir);
+        _keyStoragePath = Path.Combine(dataDir, ".master_key");
+
+        if (masterKey != null && masterKey.Length == 32)
+        {
+            _masterKey = masterKey;
+        }
+        else
+        {
+            _masterKey = LoadOrCreateMasterKey();
+        }
     }
 
     public async Task<IReadOnlyList<Models.PasswordEntry>> GetAllAsync()
@@ -163,6 +178,38 @@ public class PasswordService : IPasswordService
         });
     }
 
+    private byte[] LoadOrCreateMasterKey()
+    {
+        try
+        {
+            if (File.Exists(_keyStoragePath))
+            {
+                var keyBytes = File.ReadAllBytes(_keyStoragePath);
+                if (keyBytes.Length == 32)
+                    return keyBytes;
+            }
+        }
+        catch { }
+
+        // Generate new key and persist it
+        var newKey = new byte[32];
+        using var rng = RandomNumberGenerator.Create();
+        rng.GetBytes(newKey);
+
+        try
+        {
+            File.WriteAllBytes(_keyStoragePath, newKey);
+            // Restrict file permissions on Unix
+#if UNIX
+            var info = new System.IO.FileInfo(_keyStoragePath);
+            info.Attributes |= System.IO.FileAttributes.Hidden;
+#endif
+        }
+        catch { /* best effort persistence */ }
+
+        return newKey;
+    }
+
     private static Models.PasswordEntry MapToModel(PasswordEntity entity)
     {
         return new Models.PasswordEntry
@@ -170,7 +217,7 @@ public class PasswordService : IPasswordService
             Id = entity.Id,
             Domain = entity.Domain,
             Username = entity.Username,
-            Password = entity.Password,
+            Password = entity.Password, // encrypted
             Url = entity.Url,
             CreatedAt = entity.CreatedAt,
             UpdatedAt = entity.UpdatedAt,

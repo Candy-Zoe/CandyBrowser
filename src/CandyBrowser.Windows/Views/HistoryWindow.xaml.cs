@@ -2,70 +2,164 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using Microsoft.Web.WebView2.Wpf;
+using CandyBrowser.Shared.Abstractions;
+using Models = CandyBrowser.Core.Models;
 
 namespace CandyBrowser.Windows.Views;
 
 public partial class HistoryWindow : Window
 {
-    private readonly Dictionary<HistoryItem, CheckBox> _checkBoxes = new();
+    private readonly IHistoryService _historyService;
+    private readonly WebView2 _webView;
+    private readonly Dictionary<ListBoxItem, CheckBox> _checkBoxes = new();
 
-    public HistoryWindow()
+    public HistoryWindow(IHistoryService historyService, WebView2 webView)
     {
         InitializeComponent();
-        LoadHistory();
+        _historyService = historyService;
+        _webView = webView;
+        Loaded += async (s, e) => await LoadHistory();
     }
 
-    private void LoadHistory(string? filter = null)
+    private async Task LoadHistory(string? filter = null)
     {
         HistoryList.Items.Clear();
         _checkBoxes.Clear();
-        var items = App.History.Take(200).AsEnumerable();
-        if (!string.IsNullOrEmpty(filter) && filter != "搜索历史记录...")
+        try
         {
-            items = items.Where(h =>
-                h.Title.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
-                h.Url.Contains(filter, StringComparison.OrdinalIgnoreCase));
+            var items = await _historyService.GetAllAsync(limit: 500);
+            if (!string.IsNullOrEmpty(filter) && filter != "搜索历史记录...")
+            {
+                items = items.Where(h =>
+                    h.Title.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
+                    h.Url.Contains(filter, StringComparison.OrdinalIgnoreCase)).ToList();
+            }
+            foreach (var h in items)
+            {
+                var listBoxItem = CreateHistoryListItem(h);
+                HistoryList.Items.Add(listBoxItem);
+            }
         }
-        foreach (var h in items)
-            HistoryList.Items.Add(h);
+        catch { }
         UpdateSelectedCount();
+    }
+
+    private ListBoxItem CreateHistoryListItem(Models.HistoryEntry entry)
+    {
+        var border = new Border
+        {
+            Padding = new Thickness(8, 4, 8, 4),
+            Margin = new Thickness(0, 1, 0, 1),
+            BorderBrush = new SolidColorBrush(Color.FromRgb(0xE8, 0xE8, 0xE8)),
+            BorderThickness = new Thickness(0, 0, 0, 1),
+            Cursor = Cursors.Hand
+        };
+
+        var panel = new DockPanel();
+
+        // Checkbox
+        var checkBox = new CheckBox
+        {
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 8, 0),
+            ClickMode = ClickMode.Press
+        };
+        checkBox.Checked += HistoryCheck_Changed;
+        checkBox.Unchecked += HistoryCheck_Changed;
+        DockPanel.SetDock(checkBox, Dock.Left);
+        panel.Children.Add(checkBox);
+
+        // Title
+        var titleText = new TextBlock
+        {
+            Text = entry.Title,
+            FontSize = 12,
+            FontFamily = new FontFamily("Microsoft YaHei UI"),
+            Foreground = new SolidColorBrush(Color.FromRgb(0x33, 0x33, 0x33)),
+            VerticalAlignment = VerticalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis
+        };
+        DockPanel.SetDock(titleText, Dock.Top);
+        panel.Children.Add(titleText);
+
+        // URL
+        var urlText = new TextBlock
+        {
+            Text = entry.Url,
+            FontSize = 10,
+            FontFamily = new FontFamily("Microsoft YaHei UI"),
+            Foreground = new SolidColorBrush(Color.FromRgb(0x88, 0x88, 0x88)),
+            VerticalAlignment = VerticalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis
+        };
+        DockPanel.SetDock(urlText, Dock.Bottom);
+        panel.Children.Add(urlText);
+
+        // Date
+        var dateText = new TextBlock
+        {
+            Text = entry.LastVisit.ToString("yyyy-MM-dd HH:mm"),
+            FontSize = 10,
+            FontFamily = new FontFamily("Microsoft YaHei UI"),
+            Foreground = new SolidColorBrush(Color.FromRgb(0xAA, 0xAA, 0xAA)),
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        DockPanel.SetDock(dateText, Dock.Right);
+        panel.Children.Add(dateText);
+
+        border.Child = panel;
+
+        var clickedEntry = entry;
+        border.MouseLeftButtonDown += (s, e) =>
+        {
+            if (e.ChangedButton == MouseButton.Left && e.ClickCount == 1)
+                OpenHistoryItem(clickedEntry);
+        };
+
+        var listBoxItem = new ListBoxItem
+        {
+            Content = border,
+            Tag = entry
+        };
+        _checkBoxes[listBoxItem] = checkBox;
+
+        return listBoxItem;
     }
 
     private void SearchBox_TextChanged(object sender, TextChangedEventArgs e)
     {
-        LoadHistory(SearchBox.Text);
+        _ = LoadHistory(SearchBox.Text);
     }
 
-    private void ClearBtn_Click(object sender, RoutedEventArgs e)
+    private async void ClearBtn_Click(object sender, RoutedEventArgs e)
     {
-        if (MessageBox.Show("确定清除所有历史记录?", "确认", MessageBoxButton.YesNo, MessageBoxImage.Warning) == MessageBoxResult.Yes)
+        if (MessageBox.Show("确定清除所有历史记录？", "确认", MessageBoxButton.YesNo, MessageBoxImage.Warning) == MessageBoxResult.Yes)
         {
-            App.ClearHistory();
-            LoadHistory();
+            await _historyService.ClearAsync();
+            await LoadHistory();
         }
     }
 
-    #region Click to Open
-
-    private void HistoryItem_Click(object sender, MouseButtonEventArgs e)
+    /// <summary>
+    /// 在当前 WebView 中导航到指定 URL
+    /// </summary>
+    private void NavigateInWebView(string url)
     {
-        if (sender is Border border && border.DataContext is HistoryItem item)
+        if (_webView?.CoreWebView2 != null && !string.IsNullOrEmpty(url))
         {
-            OpenHistoryItem(item);
+            _webView.CoreWebView2.Navigate(url);
         }
     }
 
-    private void OpenHistoryItem(HistoryItem item)
+    private void OpenHistoryItem(Models.HistoryEntry item)
     {
         if (!string.IsNullOrEmpty(item.Url))
         {
-            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(item.Url) { UseShellExecute = true });
+            NavigateInWebView(item.Url);
+            DialogResult = true;
         }
     }
-
-    #endregion
-
-    #region Checkbox Operations
 
     private void HistoryCheck_Changed(object sender, RoutedEventArgs e)
     {
@@ -82,56 +176,22 @@ public partial class HistoryWindow : Window
 
     private void UpdateSelectedCount()
     {
-        // 由于 DataTemplate 中的 CheckBox 无法直接引用，我们需要通过视觉树查找
-        var count = 0;
-        foreach (var item in HistoryList.Items)
-        {
-            var listBoxItem = HistoryList.ItemContainerGenerator.ContainerFromItem(item) as ListBoxItem;
-            if (listBoxItem != null)
-            {
-                var checkBox = FindVisualChild<CheckBox>(listBoxItem);
-                if (checkBox?.IsChecked == true)
-                    count++;
-            }
-        }
+        var count = _checkBoxes.Count(kvp => kvp.Value.IsChecked == true);
         SelectedCountText.Text = $"已选 {count} 项";
     }
 
-    private List<HistoryItem> GetSelectedItems()
+    private List<Models.HistoryEntry> GetSelectedItems()
     {
-        var result = new List<HistoryItem>();
-        foreach (var item in HistoryList.Items)
+        var result = new List<Models.HistoryEntry>();
+        foreach (var kvp in _checkBoxes)
         {
-            var listBoxItem = HistoryList.ItemContainerGenerator.ContainerFromItem(item) as ListBoxItem;
-            if (listBoxItem != null)
-            {
-                var checkBox = FindVisualChild<CheckBox>(listBoxItem);
-                if (checkBox?.IsChecked == true && item is HistoryItem historyItem)
-                    result.Add(historyItem);
-            }
+            if (kvp.Value.IsChecked == true && kvp.Key.Tag is Models.HistoryEntry historyItem)
+                result.Add(historyItem);
         }
         return result;
     }
 
-    private static T? FindVisualChild<T>(DependencyObject parent) where T : DependencyObject
-    {
-        for (int i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++)
-        {
-            var child = VisualTreeHelper.GetChild(parent, i);
-            if (child is T result)
-                return result;
-            var descendant = FindVisualChild<T>(child);
-            if (descendant != null)
-                return descendant;
-        }
-        return null;
-    }
-
-    #endregion
-
-    #region Batch Operations
-
-    private void BatchOpenBtn_Click(object sender, RoutedEventArgs e)
+    private async void BatchOpenBtn_Click(object sender, RoutedEventArgs e)
     {
         var selected = GetSelectedItems();
         if (selected.Count == 0)
@@ -140,14 +200,19 @@ public partial class HistoryWindow : Window
             return;
         }
 
-        foreach (var item in selected)
+        // 打开第一条记录到当前标签页
+        if (selected.Count == 1)
         {
-            if (!string.IsNullOrEmpty(item.Url))
-                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(item.Url) { UseShellExecute = true });
+            NavigateInWebView(selected[0].Url);
+            DialogResult = true;
+        }
+        else
+        {
+            MessageBox.Show("批量打开暂不支持多条记录，请逐条点击打开", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
         }
     }
 
-    private void BatchDeleteBtn_Click(object sender, RoutedEventArgs e)
+    private async void BatchDeleteBtn_Click(object sender, RoutedEventArgs e)
     {
         var selected = GetSelectedItems();
         if (selected.Count == 0)
@@ -156,15 +221,13 @@ public partial class HistoryWindow : Window
             return;
         }
 
-        if (MessageBox.Show($"确定删除选中的 {selected.Count} 条历史记录？",
+        if (MessageBox.Show($"确定删除选中 {selected.Count} 条历史记录？",
             "确认批量删除", MessageBoxButton.YesNo, MessageBoxImage.Warning) == MessageBoxResult.Yes)
         {
             foreach (var item in selected)
-                App.RemoveHistory(item.Url);
-            LoadHistory(SearchBox.Text);
+                await _historyService.DeleteAsync(item.Id);
+            await LoadHistory(SearchBox.Text);
             MessageBox.Show($"已删除 {selected.Count} 条记录", "完成");
         }
     }
-
-    #endregion
 }

@@ -13,6 +13,7 @@ namespace CandyBrowser.Shared.Abstractions
         Task<Bookmark> AddAsync(Bookmark bookmark);
         Task UpdateAsync(Bookmark bookmark);
         Task DeleteAsync(long id);
+        Task DeleteRecursiveAsync(long id);
         Task<IReadOnlyList<Bookmark>> GetTreeAsync();
     }
 }

@@ -9,7 +9,12 @@
         KeyUp="Window_KeyUp">
 
     <Window.Resources>
-        <Style x:Key="NavBtn" TargetType="Button">
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="Resources/DialogStyles.xaml"/>
+            </ResourceDictionary.MergedDictionaries>
+
+            <Style x:Key="NavBtn" TargetType="Button">
             <Setter Property="Width" Value="32"/>
             <Setter Property="Height" Value="32"/>
             <Setter Property="FontSize" Value="14"/>
@@ -35,6 +40,7 @@
                 </Setter.Value>
             </Setter>
         </Style>
+        </ResourceDictionary>
     </Window.Resources>
 
     <Grid>
@@ -45,7 +51,7 @@
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
-        <!-- 标签栏 + 工具栏 -->
+        <!-- 标签页 + 工具栏 -->
         <Border Grid.Row="0" Background="#DEE1E6">
             <Grid>
                 <Grid.RowDefinitions>
@@ -118,15 +124,14 @@
             </ScrollViewer>
         </Border>
 
-        <!-- 网页内容 + 查找栏 -->
+        <!-- 网页内容 + 查找框 -->
         <Grid x:Name="TabContentContainer" Grid.Row="2" Background="White">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="*"/>
-                <RowDefinition Height="Auto"/>
             </Grid.RowDefinitions>
 
-            <!-- 查找栏 -->
+            <!-- 查找框 -->
             <Border x:Name="FindBar" Grid.Row="0" Background="#F8F8F8" BorderBrush="#E0E0E0"
                     BorderThickness="0,0,0,1" Padding="8,4" Visibility="Collapsed">
                 <DockPanel>
@@ -148,25 +153,57 @@
             <wv2:WebView2 x:Name="MainWebView" Grid.Row="1"
                           HorizontalAlignment="Stretch"
                           VerticalAlignment="Stretch"/>
-
-            <!-- 下载面板 -->
-            <Border x:Name="DownloadPanel" Grid.Row="2" Background="#FAFAFA" BorderBrush="#E0E0E0"
-                    BorderThickness="0,1,0,0" MaxHeight="200" Visibility="Collapsed">
-                <DockPanel>
-                    <Border DockPanel.Dock="Top" Background="#F0F0F0" Padding="8,4">
-                        <DockPanel>
-                            <TextBlock Text="下载" FontSize="13" FontWeight="SemiBold"
-                                       VerticalAlignment="Center" DockPanel.Dock="Left"/>
-                            <Button Content="✕" DockPanel.Dock="Right" Width="24" Height="24" FontSize="10"
-                                    Click="CloseDownloadPanel_Click" Style="{StaticResource NavBtn}"/>
-                        </DockPanel>
-                    </Border>
-                    <ScrollViewer VerticalScrollBarVisibility="Auto">
-                        <StackPanel x:Name="DownloadList" Margin="4"/>
-                    </ScrollViewer>
-                </DockPanel>
-            </Border>
         </Grid>
+
+        <!-- 下载面板 - 浮动在右下角，不遮挡内容 -->
+        <Border x:Name="DownloadPanel" Grid.Row="2" Background="#FAFAFA" BorderBrush="#E0E0E0"
+                BorderThickness="1" CornerRadius="8" Visibility="Collapsed"
+                HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                Width="420" Height="350" Margin="10">
+            <Border.Effect>
+                <DropShadowEffect BlurRadius="10" ShadowDepth="2" Opacity="0.3"/>
+            </Border.Effect>
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+
+                <!-- 标题栏 -->
+                <Border Grid.Row="0" Background="#F0F0F0" Padding="12,8"
+                        BorderBrush="#E0E0E0" BorderThickness="0,0,0,1"
+                        MouseLeftButtonDown="DownloadPanel_TitleBar_MouseLeftButtonDown">
+                    <DockPanel>
+                        <TextBlock Text="下载" FontSize="14" FontWeight="SemiBold"
+                                   VerticalAlignment="Center" DockPanel.Dock="Left"/>
+                        <TextBlock x:Name="DownloadCountText" Text="0 项" FontSize="11"
+                                   Foreground="#888" VerticalAlignment="Center"
+                                   DockPanel.Dock="Left" Margin="8,0,0,0"/>
+                        <Button Content="✕" DockPanel.Dock="Right" Width="24" Height="24" FontSize="10"
+                                Click="CloseDownloadPanel_Click" Style="{StaticResource NavBtn}"/>
+                    </DockPanel>
+                </Border>
+
+                <!-- 下载列表 -->
+                <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+                    <StackPanel x:Name="DownloadList" Margin="4"/>
+                </ScrollViewer>
+
+                <!-- 底部操作栏 -->
+                <Border Grid.Row="2" Background="#F5F5F5" Padding="8,6"
+                        BorderBrush="#E0E0E0" BorderThickness="0,1,0,0">
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                        <Button x:Name="OpenDownloadsFolderBtn" Click="OpenDownloadsFolderBtn_Click"
+                                Content="打开文件夹" Style="{StaticResource SecondaryBtn}"
+                                Padding="12,5" FontSize="12" Margin="0,0,6,0" Visibility="Collapsed"/>
+                        <Button x:Name="ViewAllBtn" Click="ViewAllBtn_Click"
+                                Content="查看全部" Style="{StaticResource SecondaryBtn}"
+                                Padding="12,5" FontSize="12" Visibility="Collapsed"/>
+                    </StackPanel>
+                </Border>
+            </Grid>
+        </Border>
 
         <!-- 状态栏 -->
         <Border Grid.Row="3" Background="#F0F0F0"

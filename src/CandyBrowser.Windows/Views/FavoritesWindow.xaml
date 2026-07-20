@@ -88,12 +88,13 @@
                 BorderBrush="#E8E8E8" BorderThickness="1">
             <TreeView x:Name="FavoritesTree" BorderThickness="0" Background="Transparent"
                       AllowDrop="True" Drop="Tree_Drop" DragOver="Tree_DragOver"
-                      MouseRightButtonDown="Tree_MouseRightButtonDown">
+                      PreviewKeyDown="FavoritesTree_PreviewKeyDown">
                 <TreeView.ItemContainerStyle>
                     <Style TargetType="TreeViewItem">
                         <Setter Property="IsExpanded" Value="True"/>
                         <Setter Property="Padding" Value="4,3"/>
                         <Setter Property="FontSize" Value="13"/>
+                        <EventSetter Event="MouseRightButtonDown" Handler="TreeViewItem_MouseRightButtonDown"/>
                         <EventSetter Event="MouseMove" Handler="TreeItem_MouseMove"/>
                         <EventSetter Event="Drop" Handler="TreeItem_Drop"/>
                         <EventSetter Event="DragOver" Handler="Tree_DragOver"/>

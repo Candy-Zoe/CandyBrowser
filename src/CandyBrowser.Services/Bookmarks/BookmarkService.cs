@@ -86,11 +86,21 @@ public class BookmarkService : IBookmarkService
 
     public async Task DeleteAsync(long id)
     {
-        var entity = await _db.Bookmarks.FindAsync(id);
-        if (entity == null) return;
+        await DeleteRecursiveAsync(id);
+    }
 
-        _db.Bookmarks.Remove(entity);
-        await _db.SaveChangesAsync();
+    public async Task DeleteRecursiveAsync(long id)
+    {
+        var children = await _db.Bookmarks.Where(b => b.ParentId == id).ToListAsync();
+        foreach (var child in children)
+            await DeleteRecursiveAsync(child.Id);
+
+        var entity = await _db.Bookmarks.FindAsync(id);
+        if (entity != null)
+        {
+            _db.Bookmarks.Remove(entity);
+            await _db.SaveChangesAsync();
+        }
     }
 
     public async Task<IReadOnlyList<Models.Bookmark>> GetTreeAsync()

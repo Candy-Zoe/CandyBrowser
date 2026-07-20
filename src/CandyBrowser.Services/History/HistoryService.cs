@@ -15,7 +15,7 @@ public class HistoryService : IHistoryService
         _db = db;
     }
 
-    public async Task AddAsync(string url, string title, string? faviconUrl = null)
+    public async Task AddAsync(string url, string title, string? faviconUrl = null, long? durationMs = null)
     {
         var existing = await _db.History.FirstOrDefaultAsync(h => h.Url == url);
 
@@ -25,6 +25,8 @@ public class HistoryService : IHistoryService
             existing.LastVisit = DateTime.UtcNow;
             existing.Title = title;
             existing.FaviconUrl = faviconUrl;
+            if (durationMs.HasValue)
+                existing.DurationMs = durationMs.Value;
         }
         else
         {
@@ -35,11 +37,17 @@ public class HistoryService : IHistoryService
                 FaviconUrl = faviconUrl,
                 VisitCount = 1,
                 LastVisit = DateTime.UtcNow,
-                FirstVisit = DateTime.UtcNow
+                FirstVisit = DateTime.UtcNow,
+                DurationMs = durationMs
             });
         }
 
         await _db.SaveChangesAsync();
+    }
+
+    public async Task AddAsync(string url, string title, string? faviconUrl = null)
+    {
+        await AddAsync(url, title, faviconUrl, null);
     }
 
     public async Task<IReadOnlyList<Models.HistoryEntry>> GetAllAsync(int limit = 100, int offset = 0)
@@ -80,6 +88,16 @@ public class HistoryService : IHistoryService
         await _db.SaveChangesAsync();
     }
 
+    public async Task DeleteByUrlAsync(string url)
+    {
+        var entity = await _db.History.FirstOrDefaultAsync(h => h.Url == url);
+        if (entity != null)
+        {
+            _db.History.Remove(entity);
+            await _db.SaveChangesAsync();
+        }
+    }
+
     public async Task ClearAsync(DateTime? from = null, DateTime? to = null)
     {
         var query = _db.History.AsQueryable();
@@ -90,8 +108,16 @@ public class HistoryService : IHistoryService
             query = query.Where(h => h.LastVisit <= to.Value);
 
         var items = await query.ToListAsync();
-        _db.History.RemoveRange(items);
-        await _db.SaveChangesAsync();
+        if (items.Count > 0)
+        {
+            _db.History.RemoveRange(items);
+            await _db.SaveChangesAsync();
+        }
+    }
+
+    public async Task<int> GetTotalCountAsync()
+    {
+        return await _db.History.CountAsync();
     }
 
     private static Models.HistoryEntry MapToModel(HistoryEntity entity)

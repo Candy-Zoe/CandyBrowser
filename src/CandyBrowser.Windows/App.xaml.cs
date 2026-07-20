@@ -1,292 +1,196 @@
-using System.Windows;
-using System.Text.Json;
 using System.IO;
 using System.Diagnostics;
+using System.Windows;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using CandyBrowser.Shared.Abstractions;
+using CandyBrowser.Services.Bookmarks;
+using CandyBrowser.Services.Downloads;
+using CandyBrowser.Services.Extensions;
+using CandyBrowser.Services.History;
+using CandyBrowser.Services.Navigation;
+using CandyBrowser.Services.PDF;
+using CandyBrowser.Services.Passwords;
+using CandyBrowser.Services.Reading;
+using CandyBrowser.Services.Settings;
+using CandyBrowser.Services.Tabs;
+using CandyBrowser.Data.Contexts;
+using Microsoft.EntityFrameworkCore;
 
 namespace CandyBrowser.Windows;
 
-public partial class App : Application
+public partial class App : System.Windows.Application
 {
-    private static readonly string AppDir = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "CandyBrowser");
+    private IHost? _host;
+    private IServiceScope? _appScope;
 
-    private static readonly string SettingsPath = Path.Combine(AppDir, "settings.json");
-    private static readonly string BookmarksPath = Path.Combine(AppDir, "bookmarks.json");
-    private static readonly string HistoryPath = Path.Combine(AppDir, "history.json");
+    public static IHost Host => GetCurrentHost();
+    public static IServiceScope Scope => GetCurrentScope();
 
-    private static AppSettings _settings = new();
-    private static List<BookmarkItem> _bookmarks = new();
-    private static List<HistoryItem> _history = new();
+    private static IHost GetCurrentHost()
+    {
+        var app = (App)Current!;
+        if (app._host == null)
+            throw new InvalidOperationException("App hasn't been started yet.");
+        return app._host;
+    }
 
-    public static AppSettings Settings => _settings;
-    public static List<BookmarkItem> Bookmarks => _bookmarks;
-    public static List<HistoryItem> History => _history;
+    private static IServiceScope GetCurrentScope()
+    {
+        var app = (App)Current!;
+        if (app._appScope == null)
+            throw new InvalidOperationException("App scope hasn't been created yet.");
+        return app._appScope;
+    }
 
-    protected override void OnStartup(StartupEventArgs e)
+    public static T Resolve<T>() where T : notnull
+    {
+        return Scope.ServiceProvider.GetRequiredService<T>();
+    }
+
+    protected override void OnStartup(System.Windows.StartupEventArgs e)
     {
         base.OnStartup(e);
 
-        try
-        {
-            // Create directory
-            Directory.CreateDirectory(AppDir);
-            Debug.WriteLine($"[App] Data directory created: {AppDir}");
+        _host = Microsoft.Extensions.Hosting.Host.CreateDefaultBuilder()
+            .ConfigureLogging(logging =>
+            {
+                logging.ClearProviders();
+                logging.AddConsole();
+                logging.AddDebug();
+                logging.SetMinimumLevel(LogLevel.Information);
+            })
+            .ConfigureServices((context, services) =>
+            {
+                var dataDir = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "CandyBrowser");
+                Directory.CreateDirectory(dataDir);
 
-            // Load or create settings
-            LoadSettings();
-            SaveSettings(); // Ensure file exists
+                var dbPath = Path.Combine(dataDir, "candybrowser.db");
+                services.AddDbContext<BrowserDbContext>(options =>
+                    options.UseSqlite($"Data Source={dbPath}"));
 
-            // Load or create bookmarks
-            LoadBookmarks();
-            SaveBookmarks(); // Ensure file exists
+                // Register all services as Singleton so they share one DbContext for the app lifetime
+                services.AddSingleton<IBookmarkService, BookmarkService>();
+                services.AddSingleton<IHistoryService, HistoryService>();
+                services.AddSingleton<ISettingsService, SettingsService>();
+                services.AddSingleton<IDownloadService, DownloadService>();
+                services.AddSingleton<IPasswordService, PasswordService>();
+                services.AddSingleton<INavigationService, NavigationService>();
+                services.AddSingleton<ITabManager, TabService>();
+                services.AddSingleton<IExtensionService, ExtensionService>();
+                services.AddSingleton<IReadingModeService, ReadingModeService>();
+                services.AddSingleton<IPdfService, PdfService>();
 
-            // Load or create history
-            LoadHistory();
-            SaveHistory(); // Ensure file exists
+                // JSON settings provider (backward compat)
+                services.AddSingleton<JsonSettingsProvider>();
+            })
+            .Build();
 
-            Debug.WriteLine($"[App] Data loaded: {Bookmarks.Count} bookmarks, {History.Count} history");
-        }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"[App] Startup error: {ex.Message}");
-            MessageBox.Show($"启动错误: {ex.Message}", "错误");
-        }
+        _host.Start();
+
+        // Create a single app-wide scope that lives for the entire application lifetime
+        _appScope = _host.Services.CreateScope();
+
+        // Initialize database using the app scope
+        var db = _appScope.ServiceProvider.GetRequiredService<BrowserDbContext>();
+        db.Database.EnsureCreated();
+
+        // Create and show main window via DI
+        var sp = _appScope.ServiceProvider;
+        var mainWindow = new MainWindow(
+            sp.GetRequiredService<IBookmarkService>(),
+            sp.GetRequiredService<IHistoryService>(),
+            sp.GetRequiredService<IDownloadService>(),
+            sp.GetRequiredService<INavigationService>(),
+            sp.GetRequiredService<ISettingsService>(),
+            sp.GetRequiredService<IPdfService>(),
+            sp.GetRequiredService<IReadingModeService>(),
+            sp.GetRequiredService<JsonSettingsProvider>());
+        mainWindow.Show();
     }
 
-    protected override void OnExit(ExitEventArgs e)
+    protected override void OnExit(System.Windows.ExitEventArgs e)
     {
         try
         {
-            SaveSettings();
-            SaveBookmarks();
-            SaveHistory();
-            Debug.WriteLine("[App] Data saved on exit");
+            // Dispose the app scope first (this disposes the DbContext)
+            _appScope?.Dispose();
+            _appScope = null;
         }
-        catch (Exception ex)
+        catch { /* ignore */ }
+        finally
         {
-            Debug.WriteLine($"[App] Exit error: {ex.Message}");
+            try
+            {
+                _host?.StopAsync().Wait(TimeSpan.FromSeconds(5));
+            }
+            catch { /* ignore */ }
+            finally
+            {
+                _host?.Dispose();
+            }
         }
         base.OnExit(e);
     }
+}
 
-    #region Settings
-    public static void LoadSettings()
+/// <summary>
+/// Lightweight JSON-based settings provider for backward compatibility.
+/// </summary>
+public class JsonSettingsProvider
+{
+    private static readonly string SettingsPath;
+
+    static JsonSettingsProvider()
+    {
+        var dataDir = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "CandyBrowser");
+        Directory.CreateDirectory(dataDir);
+        SettingsPath = Path.Combine(dataDir, "settings.json");
+    }
+
+    public CandyBrowser.Core.Models.Setting Get(string key, string defaultValue)
     {
         try
         {
             if (File.Exists(SettingsPath))
             {
                 var json = File.ReadAllText(SettingsPath);
-                if (!string.IsNullOrEmpty(json))
-                    _settings = JsonSerializer.Deserialize<AppSettings>(json) ?? new AppSettings();
+                var dict = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(json) ?? new();
+                if (dict.TryGetValue(key, out var val))
+                    return new CandyBrowser.Core.Models.Setting { Key = key, Value = val };
             }
         }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"[Settings] Load error: {ex.Message}");
-            _settings = new AppSettings();
-        }
+        catch { }
+        return new CandyBrowser.Core.Models.Setting { Key = key, Value = defaultValue };
     }
 
-    public static void SaveSettings()
+    public void Set(string key, string value)
     {
+        Dictionary<string, string> dict;
         try
         {
-            var json = JsonSerializer.Serialize(_settings, new JsonSerializerOptions { WriteIndented = true });
-            File.WriteAllText(SettingsPath, json);
-            Debug.WriteLine($"[Settings] Saved to {SettingsPath}");
-        }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"[Settings] Save error: {ex.Message}");
-        }
-    }
-    #endregion
-
-    #region Bookmarks
-    public static void LoadBookmarks()
-    {
-        try
-        {
-            if (File.Exists(BookmarksPath))
+            if (File.Exists(SettingsPath))
             {
-                var json = File.ReadAllText(BookmarksPath);
-                if (!string.IsNullOrEmpty(json))
-                    _bookmarks = JsonSerializer.Deserialize<List<BookmarkItem>>(json) ?? new();
+                var json = File.ReadAllText(SettingsPath);
+                dict = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(json) ?? new();
             }
-        }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"[Bookmarks] Load error: {ex.Message}");
-            _bookmarks = new();
-        }
-    }
-
-    public static void SaveBookmarks()
-    {
-        try
-        {
-            var json = JsonSerializer.Serialize(_bookmarks, new JsonSerializerOptions { WriteIndented = true });
-            File.WriteAllText(BookmarksPath, json);
-            Debug.WriteLine($"[Bookmarks] Saved {_bookmarks.Count} items to {BookmarksPath}");
-        }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"[Bookmarks] Save error: {ex.Message}");
-        }
-    }
-
-    public static void AddBookmark(string title, string url, long? parentId = null)
-    {
-        _bookmarks.Add(new BookmarkItem
-        {
-            Id = _bookmarks.Count > 0 ? _bookmarks.Max(b => b.Id) + 1 : 1,
-            Title = title,
-            Url = url,
-            ParentId = parentId,
-            CreatedAt = DateTime.Now
-        });
-        SaveBookmarks();
-        Debug.WriteLine($"[Bookmarks] Added: {title} - {url}");
-    }
-
-    public static void AddFolder(string name, long? parentId = null)
-    {
-        _bookmarks.Add(new BookmarkItem
-        {
-            Id = _bookmarks.Count > 0 ? _bookmarks.Max(b => b.Id) + 1 : 1,
-            Title = name,
-            Url = "",
-            IsFolder = true,
-            ParentId = parentId,
-            CreatedAt = DateTime.Now
-        });
-        SaveBookmarks();
-    }
-
-    public static void DeleteBookmark(long id)
-    {
-        var item = _bookmarks.FirstOrDefault(b => b.Id == id);
-        if (item != null)
-        {
-            var children = _bookmarks.Where(b => b.ParentId == id).ToList();
-            foreach (var child in children) DeleteBookmark(child.Id);
-            _bookmarks.Remove(item);
-            SaveBookmarks();
-        }
-    }
-
-    public static void MoveBookmark(long id, long? newParentId)
-    {
-        var item = _bookmarks.FirstOrDefault(b => b.Id == id);
-        if (item != null)
-        {
-            item.ParentId = newParentId;
-            SaveBookmarks();
-        }
-    }
-
-    public static void UpdateBookmark(long id, string title, string? url = null)
-    {
-        var item = _bookmarks.FirstOrDefault(b => b.Id == id);
-        if (item != null)
-        {
-            item.Title = title;
-            if (url != null) item.Url = url;
-            SaveBookmarks();
-        }
-    }
-
-    public static List<BookmarkItem> GetBookmarksByParent(long? parentId)
-    {
-        return _bookmarks.Where(b => b.ParentId == parentId).OrderBy(b => b.Title).ToList();
-    }
-    #endregion
-
-    #region History
-    public static void LoadHistory()
-    {
-        try
-        {
-            if (File.Exists(HistoryPath))
+            else
             {
-                var json = File.ReadAllText(HistoryPath);
-                if (!string.IsNullOrEmpty(json))
-                    _history = JsonSerializer.Deserialize<List<HistoryItem>>(json) ?? new();
+                dict = new();
             }
         }
-        catch (Exception ex)
+        catch
         {
-            Debug.WriteLine($"[History] Load error: {ex.Message}");
-            _history = new();
+            dict = new();
         }
+
+        dict[key] = value;
+        var jsonOut = System.Text.Json.JsonSerializer.Serialize(dict, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+        File.WriteAllText(SettingsPath, jsonOut);
     }
-
-    public static void SaveHistory()
-    {
-        try
-        {
-            if (_history.Count > 1000) _history = _history.TakeLast(1000).ToList();
-            var json = JsonSerializer.Serialize(_history, new JsonSerializerOptions { WriteIndented = true });
-            File.WriteAllText(HistoryPath, json);
-            Debug.WriteLine($"[History] Saved {_history.Count} items to {HistoryPath}");
-        }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"[History] Save error: {ex.Message}");
-        }
-    }
-
-    public static void AddHistory(string url, string title)
-    {
-        if (string.IsNullOrEmpty(url) || url.StartsWith("about:")) return;
-
-        _history.RemoveAll(h => h.Url == url);
-        _history.Insert(0, new HistoryItem { Url = url, Title = title, VisitedAt = DateTime.Now });
-        SaveHistory();
-        Debug.WriteLine($"[History] Added: {url} - {title}");
-    }
-
-    public static void ClearHistory()
-    {
-        _history.Clear();
-        SaveHistory();
-    }
-
-    public static void RemoveHistory(string url)
-    {
-        _history.RemoveAll(h => h.Url == url);
-        SaveHistory();
-    }
-    #endregion
-}
-
-public class AppSettings
-{
-    public string Homepage { get; set; } = "https://www.baidu.com";
-    public string SearchEngine { get; set; } = "https://www.baidu.com/s?wd={0}";
-    public bool ShowBookmarksBar { get; set; } = true;
-    public bool RestoreOnStartup { get; set; } = false;
-    public string Theme { get; set; } = "light";
-    public bool DoNotTrack { get; set; } = false;
-    public bool BlockPopups { get; set; } = true;
-    public bool ClearOnExit { get; set; } = false;
-}
-
-public class BookmarkItem
-{
-    public long Id { get; set; }
-    public string Title { get; set; } = "";
-    public string Url { get; set; } = "";
-    public bool IsFolder { get; set; }
-    public long? ParentId { get; set; }
-    public DateTime CreatedAt { get; set; } = DateTime.Now;
-}
-
-public class HistoryItem
-{
-    public string Url { get; set; } = "";
-    public string Title { get; set; } = "";
-    public DateTime VisitedAt { get; set; } = DateTime.Now;
 }

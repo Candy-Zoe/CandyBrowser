@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Net.Http;
+using System.Text.Json;
 using CandyBrowser.Core.Models;
 using CandyBrowser.Shared.Abstractions;
 
@@ -10,10 +11,11 @@ public class DownloadService : IDownloadService
     private readonly ConcurrentDictionary<long, DownloadItem> _downloads = new();
     private readonly ConcurrentDictionary<long, CancellationTokenSource> _cancellationTokens = new();
     private readonly HttpClient _httpClient;
-    private long _nextId = 1;
     private string _defaultDownloadPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
         "Downloads");
+    private readonly string _indexPath;
+    private long _nextId = 1;
 
     public event EventHandler<DownloadItem>? DownloadStarted;
     public event EventHandler<DownloadItem>? DownloadProgressChanged;
@@ -23,8 +25,18 @@ public class DownloadService : IDownloadService
 
     public DownloadService()
     {
+        var candyDataDir = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "CandyBrowser");
+        Directory.CreateDirectory(candyDataDir);
+        _indexPath = Path.Combine(candyDataDir, "downloads_index.json");
+
         _httpClient = new HttpClient();
         _httpClient.Timeout = TimeSpan.FromMinutes(30);
+        _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("CandyBrowser/1.0");
+
+        // Restore in-progress downloads from index
+        RestoreDownloadsIndex();
     }
 
     public IReadOnlyList<DownloadItem> GetAllDownloads()
@@ -48,14 +60,12 @@ public class DownloadService : IDownloadService
             filePath = Path.Combine(_defaultDownloadPath, request.FileName);
         }
 
-        // 确保目录存在
         var directory = Path.GetDirectoryName(filePath);
         if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
         {
             Directory.CreateDirectory(directory);
         }
 
-        // 如果文件已存在，添加数字后缀
         filePath = GetUniqueFilePath(filePath);
 
         var item = new DownloadItem
@@ -70,6 +80,7 @@ public class DownloadService : IDownloadService
         };
 
         _downloads.TryAdd(id, item);
+        SaveDownloadsIndex();
         DownloadStarted?.Invoke(this, item);
 
         var cts = new CancellationTokenSource();
@@ -107,10 +118,9 @@ public class DownloadService : IDownloadService
                 totalRead += bytesRead;
                 item.ReceivedBytes = totalRead;
 
-                // 更新进度（每200ms更新一次）
                 if ((DateTime.UtcNow - lastProgressUpdate).TotalMilliseconds > 200)
                 {
-                    var elapsed = (DateTime.UtcNow - lastProgressUpdate).TotalSeconds;
+                    var elapsed = Math.Max(0.1, (DateTime.UtcNow - lastProgressUpdate).TotalSeconds);
                     var bytesSinceLastUpdate = totalRead - lastBytesReceived;
                     item.SpeedText = $"{FormatBytes((long)(bytesSinceLastUpdate / elapsed))}/s";
 
@@ -122,6 +132,7 @@ public class DownloadService : IDownloadService
 
             item.Status = DownloadStatus.Completed;
             item.EndTime = DateTime.UtcNow;
+            SaveDownloadsIndex();
             DownloadCompleted?.Invoke(this, item);
         }
         catch (OperationCanceledException)
@@ -140,6 +151,7 @@ public class DownloadService : IDownloadService
         finally
         {
             _cancellationTokens.TryRemove(item.Id, out _);
+            SaveDownloadsIndex();
         }
     }
 
@@ -155,6 +167,7 @@ public class DownloadService : IDownloadService
         {
             item.Status = DownloadStatus.Paused;
             item.IsPaused = true;
+            SaveDownloadsIndex();
         }
 
         await Task.CompletedTask;
@@ -164,7 +177,6 @@ public class DownloadService : IDownloadService
     {
         if (_downloads.TryGetValue(id, out var item) && item.Status == DownloadStatus.Paused)
         {
-            // 重新开始下载
             item.Status = DownloadStatus.InProgress;
             item.IsPaused = false;
 
@@ -187,8 +199,13 @@ public class DownloadService : IDownloadService
 
         if (_downloads.TryGetValue(id, out var item))
         {
+            if (File.Exists(item.FilePath))
+            {
+                try { File.Delete(item.FilePath); } catch { }
+            }
             item.Status = DownloadStatus.Cancelled;
             item.EndTime = DateTime.UtcNow;
+            SaveDownloadsIndex();
             DownloadCancelled?.Invoke(this, item);
         }
 
@@ -200,6 +217,7 @@ public class DownloadService : IDownloadService
         if (_downloads.TryRemove(id, out _))
         {
             _cancellationTokens.TryRemove(id, out _);
+            SaveDownloadsIndex();
         }
 
         await Task.CompletedTask;
@@ -219,6 +237,7 @@ public class DownloadService : IDownloadService
             _downloads.TryRemove(id, out _);
         }
 
+        SaveDownloadsIndex();
         await Task.CompletedTask;
     }
 
@@ -231,6 +250,49 @@ public class DownloadService : IDownloadService
     {
         _defaultDownloadPath = path;
         return Task.CompletedTask;
+    }
+
+    private void SaveDownloadsIndex()
+    {
+        try
+        {
+            var activeDownloads = _downloads.Values
+                .Where(d => d.Status == DownloadStatus.InProgress || d.Status == DownloadStatus.Paused)
+                .ToList();
+
+            var json = JsonSerializer.Serialize(activeDownloads, new JsonSerializerOptions 
+            { 
+                WriteIndented = true,
+                Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping 
+            });
+            File.WriteAllText(_indexPath, json);
+        }
+        catch { /* best effort persistence */ }
+    }
+
+    private void RestoreDownloadsIndex()
+    {
+        try
+        {
+            if (File.Exists(_indexPath))
+            {
+                var json = File.ReadAllText(_indexPath);
+                if (!string.IsNullOrEmpty(json))
+                {
+                    var items = JsonSerializer.Deserialize<List<DownloadItem>>(json);
+                    if (items != null)
+                    {
+                        foreach (var item in items)
+                        {
+                            _downloads.TryAdd(item.Id, item);
+                            if (item.Id >= _nextId)
+                                _nextId = item.Id + 1;
+                        }
+                    }
+                }
+            }
+        }
+        catch { /* best effort restoration */ }
     }
 
     private string GetUniqueFilePath(string filePath)
@@ -258,13 +320,11 @@ public class DownloadService : IDownloadService
         string[] sizes = { "B", "KB", "MB", "GB" };
         int order = 0;
         double size = bytes;
-
         while (size >= 1024 && order < sizes.Length - 1)
         {
             order++;
             size /= 1024;
         }
-
         return $"{size:0.##} {sizes[order]}";
     }
 }

@@ -6,35 +6,40 @@ using System.IO;
 using System.Diagnostics;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.Wpf;
+using CandyBrowser.Shared.Abstractions;
+using CandyBrowser.Core.Models;
 using CandyBrowser.Windows.Views;
 
 namespace CandyBrowser.Windows;
 
 public partial class MainWindow : Window
 {
+    private readonly IBookmarkService _bookmarkService;
+    private readonly IHistoryService _historyService;
+    private readonly IDownloadService _downloadService;
+    private readonly INavigationService _navigationService;
+    private readonly ISettingsService _settingsService;
+    private readonly IPdfService _pdfService;
+    private readonly IReadingModeService _readingModeService;
+    private readonly JsonSettingsProvider _jsonSettings;
+
     private readonly Dictionary<int, TabState> _tabs = new();
     private readonly List<int> _tabOrder = new();
     private readonly List<ClosedTab> _recentlyClosed = new();
     private int _nextTabId = 1;
     private int _activeTabId = -1;
+    private DateTime? _tabStartTime;
 
     // 标签分组颜色
     private static readonly SolidColorBrush[] GroupColors =
     {
-        new(Color.FromRgb(0x4C,0x9C,0xE0)), // 蓝
-        new(Color.FromRgb(0x56,0xB8,0x70)), // 绿
-        new(Color.FromRgb(0xE8,0x6C,0x60)), // 红
-        new(Color.FromRgb(0xF5,0xA6,0x23)), // 橙
-        new(Color.FromRgb(0x9B,0x59,0xB6)), // 紫
-        new(Color.FromRgb(0x1A,0xBC,0x9C)), // 青
+        new(Color.FromRgb(0x4C,0x9C,0xE0)),
+        new(Color.FromRgb(0x56,0xB8,0x70)),
+        new(Color.FromRgb(0xE8,0x6C,0x60)),
+        new(Color.FromRgb(0xF5,0xA6,0x23)),
+        new(Color.FromRgb(0x9B,0x59,0xB6)),
+        new(Color.FromRgb(0x1A,0xBC,0x9C)),
     };
-
-    // 鼠标手势
-    private Point _gestureStart;
-    private bool _isGesture;
-
-    // 下载列表
-    private readonly List<DownloadItem> _downloads = new();
 
     // Edge 风格颜色
     private static readonly SolidColorBrush ActiveTabBrush = new(Color.FromRgb(0xFF, 0xFF, 0xFF));
@@ -42,9 +47,30 @@ public partial class MainWindow : Window
     private static readonly SolidColorBrush HoverTabBrush = new(Color.FromRgb(0xD8, 0xDC, 0xE2));
     private static readonly SolidColorBrush TabTextBrush = new(Color.FromRgb(0x33, 0x33, 0x33));
 
-    public MainWindow()
+    // 鼠标手势
+    private Point _gestureStart;
+    private bool _isGesture;
+
+    public MainWindow(
+        IBookmarkService bookmarkService,
+        IHistoryService historyService,
+        IDownloadService downloadService,
+        INavigationService navigationService,
+        ISettingsService settingsService,
+        IPdfService pdfService,
+        IReadingModeService readingModeService,
+        JsonSettingsProvider jsonSettings)
     {
         InitializeComponent();
+        _bookmarkService = bookmarkService;
+        _historyService = historyService;
+        _downloadService = downloadService;
+        _navigationService = navigationService;
+        _settingsService = settingsService;
+        _pdfService = pdfService;
+        _readingModeService = readingModeService;
+        _jsonSettings = jsonSettings;
+        
         Loaded += MainWindow_Loaded;
     }
 
@@ -52,8 +78,9 @@ public partial class MainWindow : Window
     {
         try
         {
-            BookmarksBarBorder.Visibility = App.Settings.ShowBookmarksBar
-                ? Visibility.Visible : Visibility.Collapsed;
+            // Load settings
+            var showBookmarksBar = _jsonSettings.Get("show_bookmarks_bar", "true").Value == "true";
+            BookmarksBarBorder.Visibility = showBookmarksBar ? Visibility.Visible : Visibility.Collapsed;
 
             StatusText.Text = "正在初始化 WebView2...";
 
@@ -64,7 +91,7 @@ public partial class MainWindow : Window
 
             var options = new CoreWebView2EnvironmentOptions
             {
-                AdditionalBrowserArguments = "--disable-gpu"
+                AdditionalBrowserArguments = "--disable-gpu --enable-features=WebView2"
             };
             var env = await CoreWebView2Environment.CreateAsync(null, userDataFolder, options);
 
@@ -94,15 +121,22 @@ public partial class MainWindow : Window
                         var title = MainWebView.CoreWebView2?.DocumentTitle ?? "新标签页";
                         _tabs[_activeTabId].Title = title;
                         Title = $"CandyZoe - {title}";
+                        
+                        var url = MainWebView.CoreWebView2?.Source ?? "";
                         StatusText.Text = ev.IsSuccess ? $"就绪 - {title}" : $"加载失败({ev.WebErrorStatus})";
                         RefreshTabStrip();
-                    }
-                    if (ev.IsSuccess)
-                    {
-                        var url = MainWebView.CoreWebView2?.Source ?? "";
-                        var title = MainWebView.CoreWebView2?.DocumentTitle ?? "";
-                        if (!url.StartsWith("about:"))
-                            App.AddHistory(url, title);
+
+                        // Persist history entry
+                        if (ev.IsSuccess && !url.StartsWith("about:") && !url.StartsWith("edge://"))
+                        {
+                            var duration = (_tabStartTime.HasValue) 
+                                ? (long?)(DateTime.UtcNow - _tabStartTime.Value).TotalMilliseconds 
+                                : null;
+                            _ = duration.HasValue 
+                                ? _historyService.AddAsync(url, title, faviconUrl: null, durationMs: duration.Value)
+                                : _historyService.AddAsync(url, title);
+                            _tabStartTime = DateTime.UtcNow;
+                        }
                     }
                 });
             };
@@ -113,28 +147,71 @@ public partial class MainWindow : Window
                 Dispatcher.Invoke(() => CreateNewTab(ev.Uri));
             };
 
-            // 下载处理
+            // 下载处理 - 使用服务层
             MainWebView.CoreWebView2.DownloadStarting += (s, ev) =>
             {
                 Dispatcher.Invoke(() =>
                 {
-                    var item = new DownloadItem
+                    var uri = ev.DownloadOperation.Uri;
+                    var fileName = Path.GetFileName(uri) ?? "download";
+                    
+                    var request = new DownloadRequest
                     {
-                        FileName = Path.GetFileName(ev.DownloadOperation.Uri.ToString()),
-                        Url = ev.DownloadOperation.Uri.ToString(),
-                        Status = "下载中..."
+                        Url = uri,
+                        FileName = fileName,
+                        FilePath = Path.Combine(
+                            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                            "Downloads", fileName),
+                        ShowSaveDialog = true
                     };
-                    _downloads.Insert(0, item);
-                    DownloadPanel.Visibility = Visibility.Visible;
-                    RefreshDownloadList();
-                    StatusText.Text = $"开始下载: {item.FileName}";
+
+                    // Ask user where to save
+                    var dlg = new Microsoft.Win32.SaveFileDialog
+                    {
+                        Filter = "所有文件|*.*",
+                        FileName = fileName,
+                        InitialDirectory = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)
+                    };
+
+                    if (dlg.ShowDialog() == true)
+                    {
+                        request.FilePath = dlg.FileName;
+                        request.ShowSaveDialog = false;
+                        _ = _downloadService.StartDownloadAsync(request);
+                    }
+                    else
+                    {
+                        ev.DownloadOperation.Cancel();
+                    }
                 });
             };
 
-            // 自定义右键菜单
-            MainWebView.CoreWebView2.ContextMenuRequested += (s, ev) =>
+            // Listen for download progress events
+            _downloadService.DownloadProgressChanged += (s, item) =>
             {
-                // 使用默认上下文菜单，但可以通过 ev.MenuItems 自定义
+                Dispatcher.Invoke(() =>
+                {
+                    StatusText.Text = $"下载中: {item.FileName} - {item.ProgressText}";
+                    RefreshDownloadList();
+                });
+            };
+
+            _downloadService.DownloadCompleted += (s, item) =>
+            {
+                Dispatcher.Invoke(() =>
+                {
+                    StatusText.Text = $"下载完成: {item.FileName}";
+                    RefreshDownloadList();
+                });
+            };
+
+            _downloadService.DownloadFailed += (s, item) =>
+            {
+                Dispatcher.Invoke(() =>
+                {
+                    StatusText.Text = $"下载失败: {item.FileName} - {item.ErrorMessage}";
+                    RefreshDownloadList();
+                });
             };
 
             CreateNewTab();
@@ -143,7 +220,8 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             StatusText.Text = $"初始化错误: {ex.Message}";
-            MessageBox.Show($"WebView2 初始化失败:\n{ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
+            MessageBox.Show($"WebView2 初始化失败:\n{ex.Message}\n\n请确保已安装 Microsoft Edge WebView2 Runtime。\n\n详情: {ex.InnerException?.Message}", 
+                "错误", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
 
@@ -152,13 +230,16 @@ public partial class MainWindow : Window
     private void CreateNewTab(string? url = null)
     {
         var tabId = _nextTabId++;
-        var targetUrl = !string.IsNullOrEmpty(url) ? url : App.Settings.Homepage;
+        var targetUrl = url ?? _jsonSettings.Get("homepage", "https://www.baidu.com").Value;
 
         _tabs[tabId] = new TabState { Url = targetUrl, Title = "新标签页" };
         _tabOrder.Add(tabId);
 
         SelectTab(tabId);
-        MainWebView.CoreWebView2?.Navigate(targetUrl);
+        _tabStartTime = DateTime.UtcNow;
+        
+        if (MainWebView.CoreWebView2 != null)
+            MainWebView.CoreWebView2.Navigate(targetUrl);
         RefreshTabStrip();
     }
 
@@ -226,10 +307,8 @@ public partial class MainWindow : Window
             var isActive = tabId == _activeTabId;
             int capturedTabId = tabId;
     
-            // 外层容器: 分组色条 + 标签体
             var outerPanel = new StackPanel { Orientation = Orientation.Horizontal };
     
-            // 分组色条
             if (tab.GroupId >= 0 && tab.GroupId < GroupColors.Length)
             {
                 var groupBar = new Border
@@ -254,7 +333,6 @@ public partial class MainWindow : Window
     
             var panel = new DockPanel();
     
-            // 关闭按钮 - 使用正确的模板，确保可见可点击
             var closeBtn = new Button
             {
                 Content = "\u2715",
@@ -269,7 +347,6 @@ public partial class MainWindow : Window
                 BorderThickness = new Thickness(0),
                 Padding = new Thickness(0)
             };
-            // 使用 XAML 解析的正确模板，包含 ContentPresenter + 悬停效果
             closeBtn.Template = CreateCloseButtonTemplate();
     
             closeBtn.Click += (s, e) => { e.Handled = true; CloseTab(capturedTabId); };
@@ -296,13 +373,11 @@ public partial class MainWindow : Window
                 }
             };
     
-            // 中键关闭标签
             tabBorder.PreviewMouseDown += (s, e) =>
             {
                 if (e.ChangedButton == MouseButton.Middle) { e.Handled = true; CloseTab(capturedTabId); }
             };
     
-            // 右键菜单 - 标签分组
             var ctxMenu = new ContextMenu();
             var groupHeader = new MenuItem { Header = "\u5206\u7EC4\u989C\u8272", IsEnabled = false };
             ctxMenu.Items.Add(groupHeader);
@@ -368,7 +443,7 @@ public partial class MainWindow : Window
             if (url.Contains('.') && !url.Contains(' '))
                 url = "https://" + url;
             else
-                url = string.Format(App.Settings.SearchEngine, Uri.EscapeDataString(url));
+                url = string.Format(_jsonSettings.Get("search_engine", "https://www.baidu.com/s?wd={0}").Value, Uri.EscapeDataString(url));
         }
         if (_tabs.ContainsKey(_activeTabId))
             _tabs[_activeTabId].Url = url;
@@ -382,19 +457,19 @@ public partial class MainWindow : Window
     {
         if (url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
         {
-            SecurityIcon.Text = "\uE72E"; // Lock icon
+            SecurityIcon.Text = "\uE72E";
             SecurityIcon.Foreground = new SolidColorBrush(Color.FromRgb(0x00, 0x80, 0x00));
             SecurityIcon.ToolTip = "安全连接 (HTTPS)";
         }
         else if (url.StartsWith("http://", StringComparison.OrdinalIgnoreCase))
         {
-            SecurityIcon.Text = "\uE7BA"; // Warning icon
+            SecurityIcon.Text = "\uE7BA";
             SecurityIcon.Foreground = new SolidColorBrush(Color.FromRgb(0xCC, 0x66, 0x00));
             SecurityIcon.ToolTip = "不安全连接 (HTTP)";
         }
         else
         {
-            SecurityIcon.Text = "\uE946"; // Info icon
+            SecurityIcon.Text = "\uE946";
             SecurityIcon.Foreground = new SolidColorBrush(Color.FromRgb(0x99, 0x99, 0x99));
             SecurityIcon.ToolTip = "内部页面";
         }
@@ -415,7 +490,7 @@ public partial class MainWindow : Window
     private void CloseFindBar()
     {
         FindBar.Visibility = Visibility.Collapsed;
-        MainWebView.CoreWebView2?.ExecuteScriptAsync("window.getSelection().removeAllRanges();");
+        _ = MainWebView.CoreWebView2?.ExecuteScriptAsync("window.getSelection().removeAllRanges();");
         Keyboard.Focus(MainWebView);
     }
 
@@ -427,18 +502,17 @@ public partial class MainWindow : Window
             FindMatchCount.Text = "";
             return;
         }
-        // 使用 JS 高亮查找
+        var escaped = text.Replace("'", "\\'").Replace("/", "\\/");
         var js = $@"
             (function() {{
                 window.getSelection().removeAllRanges();
-                var text = '{text.Replace("'", "\\'")}';
+                var text = '{escaped}';
                 if (!text) return 0;
                 var count = 0;
                 var body = document.body;
-                var regex = new RegExp(text.replace(/[.*+?^${{}}|()\\[\\]\\\\]/g, '\\\\$&'), 'gi');
+                var regex = new RegExp(text.replace(/[.*+?^${{{{|()\\[\\]\\\\]]/g, '\\\\$&'), 'gi');
                 var matches = body.innerText.match(regex);
                 count = matches ? matches.length : 0;
-                // 滚动到第一个匹配
                 if (count > 0) {{
                     var range = document.createRange();
                     var walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT);
@@ -457,17 +531,24 @@ public partial class MainWindow : Window
             }})()";
         _ = MainWebView.CoreWebView2?.ExecuteScriptAsync(js);
         FindMatchCount.Text = "查找中...";
-        // 延迟获取匹配数
+        
         Task.Delay(300).ContinueWith(_ =>
         {
             Dispatcher.Invoke(async () =>
             {
                 if (MainWebView.CoreWebView2 == null) return;
+                var escapedForJs = text.Replace("'", "\\'").Replace("/", "\\/");
                 var result = await MainWebView.CoreWebView2.ExecuteScriptAsync(
-                    "window.getSelection().rangeCount > 0 ? document.body.innerText.match(/" +
-                    text.Replace("'", "\\'").Replace("/", "\\/") +
-                    "/gi)?.length || 0 : 0") ?? "\"0\"";
-                FindMatchCount.Text = result.Trim('"') + " 个匹配";
+                    $"document.body.innerText.match(/{escapedForJs}/gi)?.length || 0") ?? "0";
+                try
+                {
+                    var count = int.Parse(result.Trim());
+                    FindMatchCount.Text = $"{count} 个匹配";
+                }
+                catch
+                {
+                    FindMatchCount.Text = result.Trim('"');
+                }
             });
         });
     }
@@ -478,8 +559,8 @@ public partial class MainWindow : Window
         else if (e.Key == Key.Escape) { CloseFindBar(); e.Handled = true; }
     }
 
-    private void FindNext() { /* 已在 TextChanged 中处理 */ }
-    private void FindPrev() { /* 已在 TextChanged 中处理 */ }
+    private void FindNext() { /* Already handled in TextChanged */ }
+    private void FindPrev() { /* Already handled in TextChanged */ }
     private void FindNext_Click(object sender, RoutedEventArgs e) => FindNext();
     private void FindPrev_Click(object sender, RoutedEventArgs e) => FindPrev();
     private void CloseFindBar_Click(object sender, RoutedEventArgs e) => CloseFindBar();
@@ -491,28 +572,209 @@ public partial class MainWindow : Window
     private void RefreshDownloadList()
     {
         DownloadList.Children.Clear();
-        foreach (var d in _downloads.Take(10))
+        var downloads = _downloadService.GetAllDownloads();
+        
+        // Show all downloads, sorted by start time (newest first)
+        var sortedDownloads = downloads.OrderByDescending(d => d.StartTime).ToList();
+        
+        // Update count text
+        DownloadCountText.Text = $"{sortedDownloads.Count} 项";
+        
+        // Show "View All" button if more than 5 downloads
+        ViewAllBtn.Visibility = sortedDownloads.Count > 5 ? Visibility.Visible : Visibility.Collapsed;
+        
+        // Show "Open Downloads Folder" button if any completed downloads
+        var hasCompleted = sortedDownloads.Any(d => d.Status == DownloadStatus.Completed);
+        OpenDownloadsFolderBtn.Visibility = hasCompleted ? Visibility.Visible : Visibility.Collapsed;
+        
+        foreach (var d in sortedDownloads)
         {
             var border = new Border
             {
-                Padding = new Thickness(8, 4, 8, 4),
-                Margin = new Thickness(0, 1, 0, 1),
+                Padding = new Thickness(8, 6, 8, 6),
+                Margin = new Thickness(2, 1, 2, 1),
                 BorderBrush = new SolidColorBrush(Color.FromRgb(0xE0, 0xE0, 0xE0)),
-                BorderThickness = new Thickness(0, 0, 0, 1)
+                BorderThickness = new Thickness(0, 0, 0, 1),
+                CornerRadius = new CornerRadius(4)
             };
-            var panel = new DockPanel();
-            panel.Children.Add(new TextBlock
+            
+            var panel = new StackPanel();
+            
+            // File name row
+            var namePanel = new DockPanel();
+            namePanel.Children.Add(new TextBlock
             {
                 Text = d.FileName, FontSize = 12, FontWeight = FontWeights.SemiBold,
-                VerticalAlignment = VerticalAlignment.Center
+                VerticalAlignment = VerticalAlignment.Center,
+                TextTrimming = TextTrimming.CharacterEllipsis
             });
-            panel.Children.Add(new TextBlock
+            
+            // Status icon and text
+            var statusIcon = new TextBlock
             {
-                Text = d.Status, FontSize = 11, Foreground = new SolidColorBrush(Color.FromRgb(0x66, 0x66, 0x66)),
-                VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0)
-            });
+                FontFamily = new FontFamily("Segoe MDL2 Assets"),
+                FontSize = 12,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(4, 0, 0, 0)
+            };
+            DockPanel.SetDock(statusIcon, Dock.Right);
+            
+            var statusText = new TextBlock
+            {
+                FontSize = 11,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(4, 0, 0, 0)
+            };
+            DockPanel.SetDock(statusText, Dock.Right);
+            
+            switch (d.Status)
+            {
+                case DownloadStatus.InProgress:
+                    statusIcon.Text = "\uE7BA"; // Download icon
+                    statusIcon.Foreground = new SolidColorBrush(Color.FromRgb(0x00, 0x78, 0xD4));
+                    statusText.Text = $"{d.ProgressText} - {d.SpeedText}";
+                    statusText.Foreground = new SolidColorBrush(Color.FromRgb(0x00, 0x78, 0xD4));
+                    break;
+                case DownloadStatus.Completed:
+                    statusIcon.Text = "\uE73E"; // Checkmark icon
+                    statusIcon.Foreground = new SolidColorBrush(Color.FromRgb(0x10, 0x7C, 0x10));
+                    statusText.Text = "已完成";
+                    statusText.Foreground = new SolidColorBrush(Color.FromRgb(0x10, 0x7C, 0x10));
+                    break;
+                case DownloadStatus.Failed:
+                    statusIcon.Text = "\uE77F"; // Error icon
+                    statusIcon.Foreground = new SolidColorBrush(Color.FromRgb(0xD1, 0x34, 0x34));
+                    statusText.Text = $"失败: {d.ErrorMessage}";
+                    statusText.Foreground = new SolidColorBrush(Color.FromRgb(0xD1, 0x34, 0x34));
+                    break;
+                case DownloadStatus.Paused:
+                    statusIcon.Text = "\uE71C"; // Pause icon
+                    statusIcon.Foreground = new SolidColorBrush(Color.FromRgb(0xFF, 0x8C, 0x00));
+                    statusText.Text = "已暂停";
+                    statusText.Foreground = new SolidColorBrush(Color.FromRgb(0xFF, 0x8C, 0x00));
+                    break;
+                case DownloadStatus.Cancelled:
+                    statusIcon.Text = "\uE778"; // Cancel icon
+                    statusIcon.Foreground = new SolidColorBrush(Color.FromRgb(0x8E, 0x8E, 0x8E));
+                    statusText.Text = "已取消";
+                    statusText.Foreground = new SolidColorBrush(Color.FromRgb(0x8E, 0x8E, 0x8E));
+                    break;
+                default:
+                    statusIcon.Text = "\uE8E9"; // Clock icon
+                    statusIcon.Foreground = new SolidColorBrush(Color.FromRgb(0x8E, 0x8E, 0x8E));
+                    statusText.Text = "等待中...";
+                    statusText.Foreground = new SolidColorBrush(Color.FromRgb(0x8E, 0x8E, 0x8E));
+                    break;
+            }
+            
+            namePanel.Children.Add(statusIcon);
+            namePanel.Children.Add(statusText);
+            panel.Children.Add(namePanel);
+            
+            // Progress bar for in-progress downloads
+            if (d.Status == DownloadStatus.InProgress && d.TotalBytes > 0)
+            {
+                var progressBar = new ProgressBar
+                {
+                    Value = d.ProgressPercentage,
+                    Minimum = 0,
+                    Maximum = 100,
+                    Height = 4,
+                    Margin = new Thickness(0, 4, 0, 0),
+                    Foreground = new SolidColorBrush(Color.FromRgb(0x00, 0x78, 0xD4)),
+                    Background = new SolidColorBrush(Color.FromRgb(0xE0, 0xE0, 0xE0))
+                };
+                panel.Children.Add(progressBar);
+            }
+            
+            // Action buttons for completed downloads
+            if (d.Status == DownloadStatus.Completed)
+            {
+                var actionPanel = new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    HorizontalAlignment = HorizontalAlignment.Right,
+                    Margin = new Thickness(0, 4, 0, 0)
+                };
+                
+                var openFileBtn = new Button
+                {
+                    Content = "\uE8A7 打开",
+                    FontSize = 10,
+                    Padding = new Thickness(6, 2, 6, 2),
+                    Margin = new Thickness(0, 0, 4, 0),
+                    Background = new SolidColorBrush(Color.FromRgb(0xE0, 0xE0, 0xE0)),
+                    Foreground = new SolidColorBrush(Color.FromRgb(0x33, 0x33, 0x33)),
+                    BorderThickness = new Thickness(0),
+                    Cursor = Cursors.Hand
+                };
+                openFileBtn.Click += (s, e) => OpenFile(d.FilePath);
+                
+                var openFolderBtn = new Button
+                {
+                    Content = "\uE8F4 文件夹",
+                    FontSize = 10,
+                    Padding = new Thickness(6, 2, 6, 2),
+                    Background = new SolidColorBrush(Color.FromRgb(0xE0, 0xE0, 0xE0)),
+                    Foreground = new SolidColorBrush(Color.FromRgb(0x33, 0x33, 0x33)),
+                    BorderThickness = new Thickness(0),
+                    Cursor = Cursors.Hand
+                };
+                openFolderBtn.Click += (s, e) => OpenFileFolder(d.FilePath);
+                
+                actionPanel.Children.Add(openFileBtn);
+                actionPanel.Children.Add(openFolderBtn);
+                panel.Children.Add(actionPanel);
+            }
+            
             border.Child = panel;
             DownloadList.Children.Add(border);
+        }
+    }
+
+    private void OpenFile(string filePath)
+    {
+        if (File.Exists(filePath))
+        {
+            Process.Start(new ProcessStartInfo(filePath) { UseShellExecute = true });
+        }
+        else
+        {
+            MessageBox.Show($"文件不存在: {filePath}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private void OpenFileFolder(string filePath)
+    {
+        var directory = Path.GetDirectoryName(filePath);
+        if (!string.IsNullOrEmpty(directory) && Directory.Exists(directory))
+        {
+            Process.Start(new ProcessStartInfo(directory) { UseShellExecute = true });
+        }
+        else
+        {
+            MessageBox.Show($"文件夹不存在: {directory}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private void OpenDownloadsFolderBtn_Click(object sender, RoutedEventArgs e)
+    {
+        var downloadsPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            "Downloads");
+        if (Directory.Exists(downloadsPath))
+        {
+            Process.Start(new ProcessStartInfo(downloadsPath) { UseShellExecute = true });
+        }
+    }
+
+    private void ViewAllBtn_Click(object sender, RoutedEventArgs e)
+    {
+        // Scroll to the bottom of the download list
+        var scrollViewer = FindVisualChild<ScrollViewer>(DownloadPanel);
+        if (scrollViewer != null)
+        {
+            scrollViewer.ScrollToBottom();
         }
     }
 
@@ -520,6 +782,8 @@ public partial class MainWindow : Window
     {
         DownloadPanel.Visibility = DownloadPanel.Visibility == Visibility.Visible
             ? Visibility.Collapsed : Visibility.Visible;
+        if (DownloadPanel.Visibility == Visibility.Visible)
+            RefreshDownloadList();
     }
 
     private void CloseDownloadPanel_Click(object sender, RoutedEventArgs e)
@@ -527,29 +791,43 @@ public partial class MainWindow : Window
         DownloadPanel.Visibility = Visibility.Collapsed;
     }
 
+    // Make the download panel draggable by title bar
+    private void DownloadPanel_TitleBar_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (e.LeftButton == MouseButtonState.Pressed)
+        {
+            DragMove();
+        }
+    }
+
     #endregion
 
     #region Bookmarks Bar
 
-    private void UpdateBookmarksBar()
+    private async void UpdateBookmarksBar()
     {
         BookmarksBar.Children.Clear();
-        var bookmarks = App.GetBookmarksByParent(null).Where(b => !b.IsFolder).Take(20).ToList();
-        foreach (var b in bookmarks)
+        try
         {
-            var btn = new Button
+            var bookmarks = await _bookmarkService.GetChildrenAsync(null);
+            var webBookmarks = bookmarks.Where(b => !b.IsFolder).Take(20).ToList();
+            foreach (var b in webBookmarks)
             {
-                Content = b.Title, Padding = new Thickness(8, 3, 8, 3),
-                Margin = new Thickness(1, 0, 1, 0), Cursor = Cursors.Hand, FontSize = 11,
-                Background = Brushes.Transparent, BorderThickness = new Thickness(0),
-                Foreground = new SolidColorBrush(Color.FromRgb(0x33, 0x33, 0x33))
-            };
-            btn.MouseEnter += (s, e) => btn.Background = new SolidColorBrush(Color.FromRgb(0xE0, 0xE0, 0xE0));
-            btn.MouseLeave += (s, e) => btn.Background = Brushes.Transparent;
-            string bookmarkUrl = b.Url;
-            btn.Click += (_, _) => Navigate(bookmarkUrl);
-            BookmarksBar.Children.Add(btn);
+                var btn = new Button
+                {
+                    Content = b.Title, Padding = new Thickness(8, 3, 8, 3),
+                    Margin = new Thickness(1, 0, 1, 0), Cursor = Cursors.Hand, FontSize = 11,
+                    Background = Brushes.Transparent, BorderThickness = new Thickness(0),
+                    Foreground = new SolidColorBrush(Color.FromRgb(0x33, 0x33, 0x33))
+                };
+                btn.MouseEnter += (s, e) => btn.Background = new SolidColorBrush(Color.FromRgb(0xE0, 0xE0, 0xE0));
+                btn.MouseLeave += (s, e) => btn.Background = Brushes.Transparent;
+                string bookmarkUrl = b.Url;
+                btn.Click += (_, _) => Navigate(bookmarkUrl);
+                BookmarksBar.Children.Add(btn);
+            }
         }
+        catch { /* bookmarks bar is non-critical */ }
     }
 
     #endregion
@@ -564,7 +842,7 @@ public partial class MainWindow : Window
         if (e.Key == Key.T && ctrl && shift) { RestoreClosedTab(); e.Handled = true; }
         else if (e.Key == Key.T && ctrl) { CreateNewTab(); e.Handled = true; }
         else if (e.Key == Key.W && ctrl) { if (_activeTabId > 0) CloseTab(_activeTabId); e.Handled = true; }
-        else if (e.Key == Key.F5 && shift) { /* Hard refresh - not implemented */ MainWebView.Reload(); e.Handled = true; }
+        else if (e.Key == Key.F5 && shift) { MainWebView.Reload(); e.Handled = true; }
         else if (e.Key == Key.F5) { MainWebView.Reload(); e.Handled = true; }
         else if (e.Key == Key.F11) { ToggleFullScreen(); e.Handled = true; }
         else if (e.Key == Key.F12) { MainWebView.CoreWebView2?.OpenDevToolsWindow(); e.Handled = true; }
@@ -592,7 +870,6 @@ public partial class MainWindow : Window
 
     private void Window_KeyUp(object sender, KeyEventArgs e)
     {
-        // 鼠标手势结束
         if (e.Key == Key.Right && _isGesture)
         {
             _isGesture = false;
@@ -673,41 +950,71 @@ public partial class MainWindow : Window
 
     private void ReloadBtn_Click(object sender, RoutedEventArgs e) => MainWebView.Reload();
 
-    private void HomeBtn_Click(object sender, RoutedEventArgs e) => Navigate(App.Settings.Homepage);
+    private void HomeBtn_Click(object sender, RoutedEventArgs e)
+    {
+        var homepage = _jsonSettings.Get("homepage", "https://www.baidu.com").Value;
+        Navigate(homepage);
+    }
 
-    private void BookmarkBtn_Click(object sender, RoutedEventArgs e)
+    private async void BookmarkBtn_Click(object sender, RoutedEventArgs e)
     {
         if (_activeTabId < 0 || !_tabs.ContainsKey(_activeTabId)) return;
         var tab = _tabs[_activeTabId];
         if (string.IsNullOrEmpty(tab.Url) || tab.Url.StartsWith("about:")) return;
-        App.AddBookmark(tab.Title, tab.Url);
-        UpdateBookmarksBar();
-        StatusText.Text = $"已收藏: {tab.Title}";
+
+        try
+        {
+            var bookmark = new Bookmark
+            {
+                Title = tab.Title,
+                Url = tab.Url,
+                ParentId = null,
+                IsFolder = false,
+                Position = 0
+            };
+            await _bookmarkService.AddAsync(bookmark);
+            StatusText.Text = $"已收藏: {tab.Title}";
+            UpdateBookmarksBar();
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"收藏失败: {ex.Message}";
+        }
     }
 
-    private void FavoritesBtn_Click(object sender, RoutedEventArgs e)
+    private async void FavoritesBtn_Click(object sender, RoutedEventArgs e)
     {
-        var win = new FavoritesWindow();
+        var win = new FavoritesWindow(_bookmarkService, MainWebView);
         win.Owner = this;
         win.ShowDialog();
+        await Task.Delay(100); // allow window to close
         UpdateBookmarksBar();
     }
 
-    private void HistoryBtn_Click(object sender, RoutedEventArgs e)
+    private async void HistoryBtn_Click(object sender, RoutedEventArgs e)
     {
-        var win = new HistoryWindow();
+        var win = new HistoryWindow(_historyService, MainWebView);
         win.Owner = this;
         win.ShowDialog();
+        // When HistoryWindow closes, if DialogResult is true, refresh the current page
+        if (win.DialogResult == true)
+        {
+            // The history window navigated to a URL, so reload the current tab
+            if (_activeTabId >= 0 && _tabs.TryGetValue(_activeTabId, out var tab))
+            {
+                MainWebView.CoreWebView2?.Navigate(tab.Url);
+            }
+        }
     }
 
-    private void SettingsBtn_Click(object sender, RoutedEventArgs e)
+    private async void SettingsBtn_Click(object sender, RoutedEventArgs e)
     {
-        var win = new SettingsWindow();
+        var win = new SettingsWindow(_settingsService, _jsonSettings);
         win.Owner = this;
         if (win.ShowDialog() == true)
         {
-            BookmarksBarBorder.Visibility = App.Settings.ShowBookmarksBar
-                ? Visibility.Visible : Visibility.Collapsed;
+            var showBookmarksBar = _jsonSettings.Get("show_bookmarks_bar", "true").Value == "true";
+            BookmarksBarBorder.Visibility = showBookmarksBar ? Visibility.Visible : Visibility.Collapsed;
             UpdateBookmarksBar();
         }
     }
@@ -731,6 +1038,24 @@ public partial class MainWindow : Window
     }
 
     #endregion
+
+    #region Helper Methods
+
+    private T? FindVisualChild<T>(DependencyObject parent) where T : DependencyObject
+    {
+        for (int i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++)
+        {
+            var child = VisualTreeHelper.GetChild(parent, i);
+            if (child is T typedChild)
+                return typedChild;
+            var result = FindVisualChild<T>(child);
+            if (result != null)
+                return result;
+        }
+        return null;
+    }
+
+    #endregion
 }
 
 public class TabState
@@ -744,11 +1069,4 @@ public class ClosedTab
 {
     public string Url { get; set; } = "";
     public string Title { get; set; } = "";
-}
-
-public class DownloadItem
-{
-    public string FileName { get; set; } = "";
-    public string Url { get; set; } = "";
-    public string Status { get; set; } = "";
 }
